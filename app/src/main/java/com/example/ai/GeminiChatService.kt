@@ -10,7 +10,12 @@ import com.example.model.AvatarEmotion
 import com.example.model.ChatMessage
 import com.example.model.PetCharacter
 import com.example.model.PetMemoryManager
+import com.example.model.QuizQuestion
 import com.example.model.ReactionCatalog
+import com.example.model.StoryEndingType
+import com.example.model.StoryItem
+import com.example.model.StoryNode
+import com.example.model.StoryTheme
 import com.example.ui.HomeworkSolution
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
@@ -48,26 +53,26 @@ class GeminiChatService(private val context: Context? = null) {
 
     private val TAG = "GeminiChatService"
 
-    // Lazy initialization of Firebase AI Logic models (Gemini 3.8 Flash, 4 Argon, 3.5 Flash-Lite)
+    // Lazy initialization of Firebase AI Logic models (free-tier gemini-3.8-flash & gemini-3.5-flash-lite first)
     private val flashModel by lazy {
         Firebase.ai.generativeModel("gemini-3.8-flash")
-    }
-
-    private val argonModel by lazy {
-        Firebase.ai.generativeModel("gemini-4-argon")
     }
 
     private val flashLiteModel by lazy {
         Firebase.ai.generativeModel("gemini-3.5-flash-lite")
     }
 
-    // Fast-failing HTTP client: 4s connect, 8s read
+    // Reliable HTTP client with realistic timeouts for AI reasoning
     private val client = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(4, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(18, TimeUnit.SECONDS)
+        .writeTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(22, TimeUnit.SECONDS)
         .build()
+
+    @Volatile
+    var lastAiCallSucceeded: Boolean = false
+        private set
 
     private val prefs by lazy {
         context?.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
@@ -78,45 +83,37 @@ class GeminiChatService(private val context: Context? = null) {
     }
 
     fun getCustomApiKey(): String {
-        return prefs?.getString("custom_gemini_api_key", "") ?: ""
+        return prefs?.getString("custom_gemini_api_key", "")?.trim().orEmpty()
     }
 
     fun setCustomApiKey(key: String) {
         prefs?.edit()?.putString("custom_gemini_api_key", key.trim())?.apply()
     }
 
+    /**
+     * Returns ONLY a real Gemini API Key (from user's custom input in APK or AI Studio Secrets panel).
+     * Never returns the internal Firebase google_api_key, which is not a public Gemini REST API key.
+     */
     fun getEffectiveApiKey(): String {
         val customKey = getCustomApiKey()
         if (customKey.isNotBlank()) return customKey
 
         val buildConfigKey = try {
             val key = BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String
-            key?.takeIf { it.isNotBlank() && !it.contains("MY_GEMINI_API_KEY") }
+            key?.trim()?.takeIf {
+                it.isNotBlank() &&
+                    !it.contains("MY_GEMINI_API_KEY") &&
+                    !it.contains("YOUR_API_KEY") &&
+                    it != "null"
+            }
         } catch (e: Exception) {
             null
         }
-        if (!buildConfigKey.isNullOrBlank()) return buildConfigKey
-
-        // Check Google Services generated string resources
-        if (context != null) {
-            try {
-                val resId = context.resources.getIdentifier("google_api_key", "string", context.packageName)
-                if (resId != 0) {
-                    val key = context.getString(resId)
-                    if (key.isNotBlank()) {
-                        return key
-                    }
-                }
-            } catch (e: Exception) {
-                // ignore
-            }
-        }
-        // Project Firebase/Google Services API Key fallback
-        return "AIzaSyAotv-FTjT85DtY8fwm6kTwRPJVnXFIGck"
+        return buildConfigKey.orEmpty()
     }
 
     fun isGeminiConnected(): Boolean {
-        return getEffectiveApiKey().isNotBlank()
+        return getEffectiveApiKey().isNotBlank() || lastAiCallSucceeded
     }
 
     /**
@@ -172,19 +169,20 @@ class GeminiChatService(private val context: Context? = null) {
             )
         }
 
-        // 2. Try Direct Gemini REST API with live generative intelligence (Gemini 3.8 Flash -> 3.1 Flash Lite -> 2.0 Flash)
+        // 2. If user has a real Gemini API Key (via Secrets or in-app input), try Direct Gemini REST API first
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
-                val restReply = withTimeoutOrNull(10500L) {
-                    val r38 = callGeminiApi("gemini-3.8-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
-                    if (r38.isNotBlank()) r38
+                val restReply = withTimeoutOrNull(20000L) {
+                    val r25 = callGeminiApi("gemini-2.5-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
+                    if (r25.isNotBlank()) r25
                     else {
-                        val rLite = callGeminiApi("gemini-3.1-flash-lite", apiKey, cleanMsg, character, language, history, cameraBitmap)
-                        if (rLite.isNotBlank()) rLite else callGeminiApi("gemini-2.0-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
+                        val r20 = callGeminiApi("gemini-2.0-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
+                        if (r20.isNotBlank()) r20 else callGeminiApi("gemini-3.8-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
                     }
                 }
                 if (!restReply.isNullOrBlank()) {
+                    lastAiCallSucceeded = true
                     return@withContext GeminiReply(
                         text = restReply,
                         emotion = inferEmotionFromText(restReply, character),
@@ -198,12 +196,13 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 3. Try Firebase AI Logic pass if REST didn't return
+        // 3. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) immediately when no custom REST key or as fallback
         try {
-            val firebaseReply = withTimeoutOrNull(6500L) {
+            val firebaseReply = withTimeoutOrNull(20000L) {
                 callFirebaseAi(cleanMsg, character, language, cameraBitmap)
             }
             if (!firebaseReply.isNullOrBlank()) {
+                lastAiCallSucceeded = true
                 return@withContext GeminiReply(
                     text = firebaseReply,
                     emotion = inferEmotionFromText(firebaseReply, character),
@@ -367,17 +366,23 @@ class GeminiChatService(private val context: Context? = null) {
             """.trimIndent()
         }
 
-        // 1. Try Gemini REST API with multimodal inlineData (audio/wav)
+        // 1. Try Gemini REST API with multimodal inlineData (audio/wav) if real API key is configured
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
-                val jsonResp = withTimeoutOrNull(7500L) {
-                    val r38 = callGeminiAudioJson("gemini-3.8-flash", apiKey, prompt, wavBytes)
-                    if (r38.isNotBlank()) r38
-                    else callGeminiAudioJson("gemini-2.0-flash", apiKey, prompt, wavBytes)
+                val jsonResp = withTimeoutOrNull(14000L) {
+                    val r25 = callGeminiAudioJson("gemini-2.5-flash", apiKey, prompt, wavBytes)
+                    if (r25.isNotBlank()) r25
+                    else {
+                        val r20 = callGeminiAudioJson("gemini-2.0-flash", apiKey, prompt, wavBytes)
+                        if (r20.isNotBlank()) r20 else callGeminiAudioJson("gemini-3.8-flash", apiKey, prompt, wavBytes)
+                    }
                 }
                 if (!jsonResp.isNullOrBlank()) {
-                    parseVoiceAudioJson(jsonResp, character)?.let { return@withContext it }
+                    parseVoiceAudioJson(jsonResp, character)?.let {
+                        lastAiCallSucceeded = true
+                        return@withContext it
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -386,17 +391,24 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 2. Try Firebase AI Logic (gemini-3.8-flash) with multimodal audio inlineData
+        // 2. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) with multimodal audio inlineData
         try {
-            val fbResp = withTimeoutOrNull(6500L) {
+            val fbResp = withTimeoutOrNull(14000L) {
                 val multimodalReq = content {
                     inlineData(wavBytes, "audio/wav")
                     text(prompt)
                 }
-                flashModel.generateContent(multimodalReq).text
+                try {
+                    flashModel.generateContent(multimodalReq).text
+                } catch (_: Exception) {
+                    flashLiteModel.generateContent(multimodalReq).text
+                }
             }
             if (!fbResp.isNullOrBlank()) {
-                parseVoiceAudioJson(fbResp, character)?.let { return@withContext it }
+                parseVoiceAudioJson(fbResp, character)?.let {
+                    lastAiCallSucceeded = true
+                    return@withContext it
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -574,77 +586,57 @@ class GeminiChatService(private val context: Context? = null) {
             }
         """.trimIndent()
 
-        // 1. Try Live Gemini 4 Argon / Gemini 3.8 Flash API with JSON Schema and Multimodal Photo
+        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-2.5-flash -> gemini-2.0-flash -> gemini-3.8-flash)
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
-                val jsonResponse = withTimeoutOrNull(18000L) {
-                    val rArgon = callGeminiJson("gemini-4-argon", apiKey, prompt, photoBitmap)
-                    if (rArgon.isNotBlank()) rArgon
+                val jsonResponse = withTimeoutOrNull(24000L) {
+                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, photoBitmap)
+                    if (r25.isNotBlank()) r25
                     else {
-                        val r38 = callGeminiJson("gemini-3.8-flash", apiKey, prompt, photoBitmap)
-                        if (r38.isNotBlank()) r38 else callGeminiJson("gemini-2.0-flash", apiKey, prompt, photoBitmap)
+                        val r20 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, photoBitmap)
+                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-3.8-flash", apiKey, prompt, photoBitmap)
                     }
                 }
 
                 if (!jsonResponse.isNullOrBlank()) {
-                    val cleanJson = jsonResponse.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
-                    val obj = JSONObject(cleanJson)
-                    val stepsList = mutableListOf<String>()
-                    val stepsArray = obj.optJSONArray("stepByStep")
-                    if (stepsArray != null) {
-                        for (i in 0 until stepsArray.length()) {
-                            stepsList.add(stepsArray.getString(i))
-                        }
-                    }
-                    if (stepsList.isNotEmpty()) {
-                        return@withContext HomeworkSolution(
-                            subject = obj.optString("subject", subject),
-                            questionSummary = obj.optString("questionSummary", actualQuestion),
-                            stepByStep = stepsList,
-                            finalAnswer = obj.optString("finalAnswer", "Solusi telah diselesaikan secara lengkap."),
-                            tutorTip = obj.optString("tutorTip", "Tips dari ${character.name}: Pahami konsepnya dan jangan ragu mencoba lagi!"),
-                            conceptOrFormula = obj.optString("conceptOrFormula", ""),
-                            practiceChallenge = obj.optString("practiceChallenge", "")
-                        )
+                    parseHomeworkJson(jsonResponse, subject, actualQuestion, character, isFromAi = true)?.let {
+                        lastAiCallSucceeded = true
+                        return@withContext it
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.d(TAG, "Gemini homework help error: ${e.message}")
+                Log.d(TAG, "Gemini REST homework help error: ${e.message}")
             }
         }
 
-        // 2. Try Firebase AI Logic (gemini-4-argon / gemini-3.8-flash) for homework help
+        // 2. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) immediately with multimodal photo support
         try {
-            val fbJson = withTimeoutOrNull(10000L) {
+            val fbJson = withTimeoutOrNull(24000L) {
+                val callModel: suspend (com.google.firebase.ai.GenerativeModel) -> String? = { model ->
+                    if (photoBitmap != null) {
+                        model.generateContent(
+                            content {
+                                image(photoBitmap)
+                                text(prompt)
+                            }
+                        ).text
+                    } else {
+                        model.generateContent(prompt).text
+                    }
+                }
                 try {
-                    argonModel.generateContent(prompt).text
+                    callModel(flashModel)
                 } catch (_: Exception) {
-                    flashModel.generateContent(prompt).text
+                    callModel(flashLiteModel)
                 }
             }
             if (!fbJson.isNullOrBlank()) {
-                val cleanJson = fbJson.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
-                val obj = JSONObject(cleanJson)
-                val stepsList = mutableListOf<String>()
-                val stepsArray = obj.optJSONArray("stepByStep")
-                if (stepsArray != null) {
-                    for (i in 0 until stepsArray.length()) {
-                        stepsList.add(stepsArray.getString(i))
-                    }
-                }
-                if (stepsList.isNotEmpty()) {
-                    return@withContext HomeworkSolution(
-                        subject = obj.optString("subject", subject),
-                        questionSummary = obj.optString("questionSummary", actualQuestion),
-                        stepByStep = stepsList,
-                        finalAnswer = obj.optString("finalAnswer", "Solusi telah diselesaikan secara lengkap."),
-                        tutorTip = obj.optString("tutorTip", "Tips dari ${character.name}: Pahami konsepnya dan jangan ragu mencoba lagi!"),
-                        conceptOrFormula = obj.optString("conceptOrFormula", ""),
-                        practiceChallenge = obj.optString("practiceChallenge", "")
-                    )
+                parseHomeworkJson(fbJson, subject, actualQuestion, character, isFromAi = true)?.let {
+                    lastAiCallSucceeded = true
+                    return@withContext it
                 }
             }
         } catch (e: CancellationException) {
@@ -653,8 +645,412 @@ class GeminiChatService(private val context: Context? = null) {
             Log.d(TAG, "Firebase AI homework help skipped: ${e.message}")
         }
 
-        // 3. High-Precision Deterministic Educational Solver (Calculates real numbers, formulas, and facts offline)
+        // 3. Offline Educational Solver
         return@withContext solveHomeworkDeterministically(subject, actualQuestion, character)
+    }
+
+    private fun parseHomeworkJson(
+        rawJson: String,
+        subject: String,
+        actualQuestion: String,
+        character: PetCharacter,
+        isFromAi: Boolean
+    ): HomeworkSolution? {
+        return try {
+            val cleanJson = extractJsonObjectString(rawJson)
+            val obj = JSONObject(cleanJson)
+            val stepsList = mutableListOf<String>()
+            val stepsArray = obj.optJSONArray("stepByStep")
+            if (stepsArray != null) {
+                for (i in 0 until stepsArray.length()) {
+                    val step = stepsArray.optString(i).trim()
+                    if (step.isNotBlank()) stepsList.add(step)
+                }
+            }
+            if (stepsList.isNotEmpty()) {
+                HomeworkSolution(
+                    subject = obj.optString("subject", subject),
+                    questionSummary = obj.optString("questionSummary", actualQuestion),
+                    stepByStep = stepsList,
+                    finalAnswer = obj.optString("finalAnswer", "Solusi telah diselesaikan secara lengkap."),
+                    tutorTip = obj.optString("tutorTip", "Tips dari ${character.name}: Pahami konsepnya dan jangan ragu mencoba lagi!"),
+                    conceptOrFormula = obj.optString("conceptOrFormula", ""),
+                    practiceChallenge = obj.optString("practiceChallenge", ""),
+                    isFromAi = isFromAi
+                )
+            } else null
+        } catch (e: Exception) {
+            Log.d(TAG, "Failed to parse homework JSON: ${e.message}")
+            null
+        }
+    }
+
+    private fun extractJsonObjectString(raw: String): String {
+        val trimmed = raw.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
+        val firstBrace = trimmed.indexOf('{')
+        val lastBrace = trimmed.lastIndexOf('}')
+        if (firstBrace in 0 until lastBrace) {
+            return trimmed.substring(firstBrace, lastBrace + 1)
+        }
+        return trimmed
+    }
+
+    /**
+     * Generates an interactive AI Quiz Question (Kuis Suara & Cerdas Cermat) via Gemini AI.
+     */
+    suspend fun generateQuizQuestion(
+        topic: String,
+        character: PetCharacter
+    ): QuizQuestion = withContext(Dispatchers.IO) {
+        val prompt = """
+            Kamu adalah ${character.name} (${character.species.displayName}). Buatlah 1 pertanyaan kuis pilihan ganda yang seru, cerdas, dan mendidik tentang topik "$topic" dalam Bahasa Indonesia.
+            Gaya penjelasan pembahasan harus sesuai kepribadianmu: ${character.personalityPrompt}
+            
+            Kembalikan HANYA JSON valid dengan format berikut:
+            {
+              "topic": "$topic",
+              "question": "Pertanyaan kuis yang menarik?",
+              "options": ["Pilihan A", "Pilihan B", "Pilihan C", "Pilihan D"],
+              "correctIndex": 0,
+              "explanation": "Penjelasan singkat mengapa jawaban tersebut benar dengan gaya bicara khas ${character.name}"
+            }
+        """.trimIndent()
+
+        val rawJson = callAnyGeminiJson(prompt)
+        if (!rawJson.isNullOrBlank()) {
+            try {
+                val obj = JSONObject(extractJsonObjectString(rawJson))
+                val optsArr = obj.optJSONArray("options")
+                val options = mutableListOf<String>()
+                if (optsArr != null) {
+                    for (i in 0 until optsArr.length()) {
+                        options.add(optsArr.optString(i))
+                    }
+                }
+                if (options.size >= 4) {
+                    return@withContext QuizQuestion(
+                        topic = obj.optString("topic", topic),
+                        question = obj.optString("question", ""),
+                        options = options.take(4),
+                        correctIndex = obj.optInt("correctIndex", 0).coerceIn(0, 3),
+                        explanation = obj.optString("explanation", "Jawaban yang tepat sekali!"),
+                        isFromAi = true
+                    )
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Failed to parse AI quiz JSON: ${e.message}")
+            }
+        }
+
+        // Offline curated quiz bank fallback
+        val fallbackPool = listOf(
+            QuizQuestion(
+                topic = "Sains & Antariksa",
+                question = "Planet manakah di Tata Surya kita yang dikenal memiliki cincin es paling besar dan indah?",
+                options = listOf("Mars", "Saturnus", "Venus", "Merkurius"),
+                correctIndex = 1,
+                explanation = "Saturnus punya sistem cincin raksasa yang terbentuk dari miliaran bongkahan es dan batuan angkasa!",
+                isFromAi = false
+            ),
+            QuizQuestion(
+                topic = "Pengetahuan Umum",
+                question = "Hewan mamalia laut apakah yang merupakan hewan terbesar yang pernah hidup di Bumi?",
+                options = listOf("Hiu Putih Besar", "Paus Biru", "Lumba-lumba Hidung Botol", "Gajah Afrika"),
+                correctIndex = 1,
+                explanation = "Paus Biru bisa tumbuh sepanjang 30 meter dan beratnya mencapai lebih dari 150 ton!",
+                isFromAi = false
+            ),
+            QuizQuestion(
+                topic = "Logika & Matematika",
+                question = "Jika sebuah kereta listrik bergerak ke arah Utara dengan kecepatan 80 km/jam dan angin bertiup ke Selatan, ke manakah arah asap kereta tersebut?",
+                options = listOf("Ke Utara", "Ke Selatan", "Ke Timur", "Tidak mengeluarkan asap"),
+                correctIndex = 3,
+                explanation = "Hehe, namanya juga kereta listrik! Kereta listrik tidak mengeluarkan asap sama sekali!",
+                isFromAi = false
+            ),
+            QuizQuestion(
+                topic = "Alam & Biologi",
+                question = "Gas apakah yang diserap oleh tumbuhan hijau dari udara saat melakukan proses fotosintesis di siang hari?",
+                options = listOf("Oksigen", "Karbondioksida", "Helium", "Hidrogen"),
+                correctIndex = 1,
+                explanation = "Tumbuhan menyerap Karbondioksida (CO2) dan melepaskan Oksigen (O2) yang segar untuk kita hirup!",
+                isFromAi = false
+            )
+        )
+        return@withContext fallbackPool.random()
+    }
+
+    /**
+     * Generates an interactive branching story chapter (Mode Dongeng & Cerita Petualangan Interaktif) via Gemini AI,
+     * supporting custom user actions, magical inventory items, chapter progression, and dynamic endings.
+     */
+    suspend fun generateStoryNode(
+        theme: StoryTheme,
+        chapter: Int,
+        maxChapters: Int = 5,
+        previousStory: String,
+        chosenOption: String?,
+        inventory: List<StoryItem> = emptyList(),
+        character: PetCharacter,
+        userNickname: String = ""
+    ): StoryNode = withContext(Dispatchers.IO) {
+        val isEndingChapter = chapter >= maxChapters
+        val inventorySummary = if (inventory.isEmpty()) {
+            "Belum ada item di tas ajaib"
+        } else {
+            inventory.joinToString(", ") { "${it.emoji} ${it.name}" }
+        }
+        val playerCallName = if (userNickname.isNotBlank()) userNickname else "Sahabatku"
+
+        val prompt = """
+            Kamu adalah pendongeng 3D interaktif bernama ${character.name} (${character.species.displayName}) dengan sifat: ${character.personalityPrompt}.
+            Buatlah Babak ke-$chapter dari $maxChapters untuk mode "Dongeng Petualangan" bertema "${theme.title}" (${theme.promptHint}).
+            Tokoh utama petualangan ini adalah kamu (${character.name}) dan pengguna bernama "$playerCallName".
+            Tas Inventaris Ajaib saat ini: [$inventorySummary].
+            ${if (previousStory.isNotBlank()) "\nRingkasan babak sebelumnya:\n${previousStory.takeLast(1400)}" else ""}
+            ${if (!chosenOption.isNullOrBlank()) "\nKeputusan / Aksi yang baru saja dilakukan oleh $playerCallName: \"$chosenOption\". Pastikan narasi babak ini merespons langsung keputusan atau penggunaan item tersebut secara seru dan dramatis!" else ""}
+            ${if (isEndingChapter) "\nIni adalah Babak Klimaks / Akhir ($chapter dari $maxChapters). Berikan puncak cerita dan akhir yang sangat memuaskan sesuai keputusan pemain! Namun tetap berikan choiceA dan choiceB jika pemain ingin melanjutkan ke Babak Epilog Tambahan." else "\nDi akhir babak ini, hadirkan situasi menegangkan/unik dan berikan 2 pilihan tindakan berbeda (choiceA dan choiceB) untuk menentukan alur selanjutnya."}
+            
+            Aturan Penting:
+            1. Gunakan bahasa Indonesia yang ekspresif, imajinatif, dan enak dibacakan dengan suara oleh ${character.name} (3-4 kalimat hidup).
+            2. Sertakan "petReactionComment" (1 kalimat singkat komentar spontan ${character.name} sesuai sifatnya di atas panggung).
+            3. Sertakan "sceneEmotion" dengan memilih salah satu dari: HAPPY, SURPRISED, THINKING, LOVING, SLEEPY, ANGRY.
+            4. Pada setiap babak (terutama babak 1-4), berikan 1 item ajaib baru atau petunjuk unik di dalam "newItem" (nama pendek, 1 emoji, dan deskripsi singkat kegunaannya) yang ditemukan dalam cerita.
+            5. Jika isEnding = true, isi "endingTitle" (judul akhir yang keren) dan "endingType" dengan salah satu dari: HEROIC_LEGEND, SECRET_DISCOVERY, FUNNY_TWIST, COZY_PEACEFUL.
+            
+            Kembalikan HANYA JSON valid dengan format persis berikut:
+            {
+              "chapterNumber": $chapter,
+              "title": "Judul Babak $chapter",
+              "narrative": "Narasi cerita babak ini (3-4 kalimat menarik yang langsung melibatkan $playerCallName dan ${character.name})...",
+              "petReactionComment": "Komentar singkat ekspresif dari ${character.name}...",
+              "sceneEmotion": "HAPPY",
+              "choiceA": "Tindakan pilihan A (maks 8 kata)",
+              "choiceB": "Tindakan pilihan B (maks 8 kata)",
+              "newItem": {
+                "name": "Nama Item Ajaib",
+                "emoji": "🗝️",
+                "description": "Kegunaan singkat item di petualangan"
+              },
+              "isEnding": $isEndingChapter,
+              "endingTitle": "${if (isEndingChapter) "Gelar Akhir Petualangan" else ""}",
+              "endingType": "HEROIC_LEGEND"
+            }
+        """.trimIndent()
+
+        val rawJson = callAnyGeminiJson(prompt)
+        if (!rawJson.isNullOrBlank()) {
+            try {
+                val obj = JSONObject(extractJsonObjectString(rawJson))
+                val narrative = obj.optString("narrative", "").trim()
+                if (narrative.isNotBlank()) {
+                    val emotionStr = obj.optString("sceneEmotion", "HAPPY").uppercase()
+                    val emotion = AvatarEmotion.entries.find { it.name == emotionStr } ?: AvatarEmotion.HAPPY
+
+                    val endingTypeStr = obj.optString("endingType", "HEROIC_LEGEND").uppercase()
+                    val endingType = StoryEndingType.entries.find { it.name == endingTypeStr }
+                        ?: StoryEndingType.HEROIC_LEGEND
+
+                    val itemObj = obj.optJSONObject("newItem")
+                    val acquiredItem = if (itemObj != null) {
+                        val itemName = itemObj.optString("name", "").trim()
+                        if (itemName.isNotBlank() && inventory.none { it.name.equals(itemName, ignoreCase = true) }) {
+                            StoryItem(
+                                id = "${theme.name.lowercase()}_${chapter}_${itemName.lowercase().replace(" ", "_")}",
+                                name = itemName,
+                                emoji = itemObj.optString("emoji", "✨").take(4).ifBlank { "✨" },
+                                description = itemObj.optString("description", "Ditemukan di Babak $chapter"),
+                                chapterAcquired = chapter
+                            )
+                        } else null
+                    } else null
+
+                    return@withContext StoryNode(
+                        chapterNumber = chapter,
+                        maxChapters = maxChapters,
+                        title = obj.optString("title", "Babak $chapter: ${theme.title}"),
+                        narrative = narrative,
+                        petReactionComment = obj.optString(
+                            "petReactionComment",
+                            "Wah, pilihanmu bikin petualangan kita makin seru!"
+                        ),
+                        sceneEmotion = emotion,
+                        choiceA = obj.optString("choiceA", "Telusuri jalur bercahaya di depan"),
+                        choiceB = obj.optString("choiceB", "Periksa petunjuk kuno bersama ${character.name}"),
+                        acquiredItem = acquiredItem,
+                        isEnding = obj.optBoolean("isEnding", isEndingChapter),
+                        endingTitle = obj.optString(
+                            "endingTitle",
+                            if (isEndingChapter) "Penjelajah Legendaris ${theme.title}" else ""
+                        ),
+                        endingType = endingType,
+                        isFromAi = true
+                    )
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Failed to parse AI story JSON: ${e.message}")
+            }
+        }
+
+        // Rich theme-aware multi-chapter fallback if offline
+        return@withContext buildOfflineStoryNode(
+            theme = theme,
+            chapter = chapter,
+            maxChapters = maxChapters,
+            chosenOption = chosenOption,
+            character = character,
+            playerCallName = playerCallName
+        )
+    }
+
+    private fun buildOfflineStoryNode(
+        theme: StoryTheme,
+        chapter: Int,
+        maxChapters: Int,
+        chosenOption: String?,
+        character: PetCharacter,
+        playerCallName: String
+    ): StoryNode {
+        val isEnding = chapter >= maxChapters
+        return when (chapter) {
+            1 -> StoryNode(
+                chapterNumber = 1,
+                maxChapters = maxChapters,
+                title = "Babak 1: Gerbang ${theme.title}",
+                narrative = "Angin sejuk berhembus saat $playerCallName dan ${character.name} melangkah masuk ke wilayah ${theme.title}. Di hadapan kalian, sebuah prasasti bercahaya bergetar pelan sambil memancarkan peta rahasia menuju pusat keajaiban!",
+                petReactionComment = "Lihat itu $playerCallName! Aku menemukan sesuatu yang berkilau di dekat prasasti!",
+                sceneEmotion = AvatarEmotion.SURPRISED,
+                choiceA = "Sentuh simbol bintang di prasasti kuno",
+                choiceB = "Telusuri jembatan rahasia di sebelah kanan",
+                acquiredItem = StoryItem(
+                    id = "item_${theme.name}_1",
+                    name = "Kompas Kristal Bintang",
+                    emoji = "🧭",
+                    description = "Menunjuk arah menuju rahasia tersembunyi di ${theme.title}",
+                    chapterAcquired = 1
+                ),
+                isEnding = false,
+                isFromAi = false
+            )
+            2 -> StoryNode(
+                chapterNumber = 2,
+                maxChapters = maxChapters,
+                title = "Babak 2: Teka-Teki Sang Penjaga",
+                narrative = "Keputusanmu untuk '${chosenOption ?: "melangkah maju"}' membawa $playerCallName dan ${character.name} ke sebuah aula megah. Seekor penjaga kuno muncul sambil tersenyum ramah dan menyerahkan lentera perak yang menyala hangat.",
+                petReactionComment = "Wah, untung ada kamu $playerCallName! Kita pilih jalur mana sekarang?",
+                sceneEmotion = AvatarEmotion.SURPRISED,
+                choiceA = "Gunakan cahaya lentera untuk membuka pintu emas",
+                choiceB = "Ajak sang penjaga berdiskusi tentang jalan pintas",
+                acquiredItem = StoryItem(
+                    id = "item_${theme.name}_2",
+                    name = "Lentera Cahaya Perak",
+                    emoji = "🏮",
+                    description = "Menerangi lorong gelap dan mengungkap tulisan kuno",
+                    chapterAcquired = 2
+                ),
+                isEnding = false,
+                isFromAi = false
+            )
+            3 -> StoryNode(
+                chapterNumber = 3,
+                maxChapters = maxChapters,
+                title = "Babak 3: Lorong Gema Ajaib",
+                narrative = "Setelah '${chosenOption ?: "memilih jalan tersebut"}', dinding kristal di sekitar $playerCallName dan ${character.name} mulai bernyanyi merdu. Di tengah ruangan tampak peti permata yang terkunci rapat oleh segel teka-teki.",
+                petReactionComment = "Telingaku sampai bergoyang mendengar melodi ajaib ini!",
+                sceneEmotion = AvatarEmotion.HAPPY,
+                choiceA = "Tirukan nada melodi kristal bersama ${character.name}",
+                choiceB = "Buka segel peti menggunakan item di tas kita",
+                acquiredItem = StoryItem(
+                    id = "item_${theme.name}_3",
+                    name = "Kunci Melodi Zamrud",
+                    emoji = "🗝️",
+                    description = "Kunci yang beresonansi dengan suara persahabatan",
+                    chapterAcquired = 3
+                ),
+                isEnding = false,
+                isFromAi = false
+            )
+            4 -> StoryNode(
+                chapterNumber = 4,
+                maxChapters = maxChapters,
+                title = "Babak 4: Ambang Puncak Rahasia",
+                narrative = "Berkat tindakan '${chosenOption ?: "cerdikmu"}', gerbang raksasa menuju inti ${theme.title} terbuka lebar! Cahaya keemasan menyambut $playerCallName dan ${character.name}, menyisakan satu keputusan terakhir sebelum rahasia utama terungkap.",
+                petReactionComment = "Sebentar lagi kita sampai di puncak petualangan kita!",
+                sceneEmotion = AvatarEmotion.SURPRISED,
+                choiceA = "Melangkah bersama ke mahkota cahaya utama",
+                choiceB = "Periksa altar bintang rahasia di sudut ruangan",
+                acquiredItem = StoryItem(
+                    id = "item_${theme.name}_4",
+                    name = "Permata Harmoni",
+                    emoji = "💎",
+                    description = "Lambang keberanian dan kekompakan bersama ${character.name}",
+                    chapterAcquired = 4
+                ),
+                isEnding = false,
+                isFromAi = false
+            )
+            else -> StoryNode(
+                chapterNumber = chapter,
+                maxChapters = maxChapters,
+                title = "Babak Klimaks: Legenda ${theme.title}!",
+                narrative = "Pilihanmu untuk '${chosenOption ?: "melangkah dengan berani"}' mengaktifkan keajaiban tertinggi di ${theme.title}! Seluruh penjuru dunia dongeng bersorak merayakan keberhasilan $playerCallName dan ${character.name} sebagai sahabat petualang sejati.",
+                petReactionComment = "Horeee! Petualangan kita luar biasa banget, $playerCallName!",
+                sceneEmotion = AvatarEmotion.LOVING,
+                choiceA = "Lanjutkan ke Babak Epilog Baru",
+                choiceB = "Jelajahi Rahasia Tersembunyi Lainnya",
+                acquiredItem = if (chapter == maxChapters) StoryItem(
+                    id = "item_${theme.name}_crown",
+                    name = "Medali Penjelajah Legendaris",
+                    emoji = "🏅",
+                    description = "Anugerah tertinggi karena menamatkan ${theme.title}",
+                    chapterAcquired = chapter
+                ) else null,
+                isEnding = isEnding,
+                endingTitle = "Sahabat Penjelajah Legendaris ${theme.title}",
+                endingType = StoryEndingType.HEROIC_LEGEND,
+                isFromAi = false
+            )
+        }
+    }
+
+    private suspend fun callAnyGeminiJson(prompt: String): String? = withContext(Dispatchers.IO) {
+        val apiKey = getEffectiveApiKey()
+        if (apiKey.isNotBlank()) {
+            try {
+                val rest = withTimeoutOrNull(18000L) {
+                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, null)
+                    if (r25.isNotBlank()) r25
+                    else {
+                        val r20 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, null)
+                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-3.8-flash", apiKey, prompt, null)
+                    }
+                }
+                if (!rest.isNullOrBlank()) {
+                    lastAiCallSucceeded = true
+                    return@withContext rest
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+
+        try {
+            val fb = withTimeoutOrNull(18000L) {
+                try {
+                    flashModel.generateContent(prompt).text
+                } catch (_: Exception) {
+                    flashLiteModel.generateContent(prompt).text
+                }
+            }
+            if (!fb.isNullOrBlank()) {
+                lastAiCallSucceeded = true
+                return@withContext fb
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
+
+        null
     }
 
     private fun callGeminiJson(
@@ -1145,7 +1541,8 @@ class GeminiChatService(private val context: Context? = null) {
                         "Periksa kembali hasil perhitungan untuk memastikan tidak ada kesalahan pembulatan atau tanda."
                     ),
                     finalAnswer = "Hasil akhir dari $aStr $op $bStr adalah $resStr.",
-                    tutorTip = "Tips dari ${char.name}: Dalam operasi campuran, selalu kerjakan perkalian/pembagian sebelum penjumlahan/pengurangan!"
+                    tutorTip = "Tips dari ${char.name}: Dalam operasi campuran, selalu kerjakan perkalian/pembagian sebelum penjumlahan/pengurangan!",
+                    isFromAi = false
                 )
             }
 
@@ -1167,7 +1564,8 @@ class GeminiChatService(private val context: Context? = null) {
                         "Hitung Keliling: K = 2 × 3,14 × $r = $kelStr satuan panjang."
                     ),
                     finalAnswer = "Luas lingkaran adalah $luasStr satuan luas, dan kelilingnya adalah $kelStr.",
-                    tutorTip = "Tips dari ${char.name}: Jika jari-jari kelipatan 7, gunakan π = 22/7 agar mudah dicoret!"
+                    tutorTip = "Tips dari ${char.name}: Jika jari-jari kelipatan 7, gunakan π = 22/7 agar mudah dicoret!",
+                    isFromAi = false
                 )
             }
 
@@ -1188,7 +1586,8 @@ class GeminiChatService(private val context: Context? = null) {
                         "Kalikan kedua nilai tersebut: Luas = $luasStr satuan luas."
                     ),
                     finalAnswer = "Luas segitiga tersebut adalah $luasStr satuan luas.",
-                    tutorTip = "Tips dari ${char.name}: Ingat, tinggi segitiga harus selalu tegak lurus (90°) dengan alasnya ya!"
+                    tutorTip = "Tips dari ${char.name}: Ingat, tinggi segitiga harus selalu tegak lurus (90°) dengan alasnya ya!",
+                    isFromAi = false
                 )
             }
 
@@ -1209,12 +1608,30 @@ class GeminiChatService(private val context: Context? = null) {
                         "Tarik akar kuadrat untuk mencari c: c = √(${a * a + b * b}) = $cStr."
                     ),
                     finalAnswer = "Panjang sisi miring segitiga siku-siku adalah $cStr.",
-                    tutorTip = "Tips dari ${char.name}: Hafalkan tripel Pythagoras populer seperti (3, 4, 5) dan (5, 12, 13) untuk menghemat waktu ujian!"
+                    tutorTip = "Tips dari ${char.name}: Hafalkan tripel Pythagoras populer seperti (3, 4, 5) dan (5, 12, 13) untuk menghemat waktu ujian!",
+                    isFromAi = false
                 )
             }
         }
 
-        // 2. SCIENCE / IPA
+        // 2. SCIENCE / IPA / FILSAFAT SAINS
+        if (lower.contains("simulasi") && (lower.contains("kehidupan") || lower.contains("teori") || lower.contains("hipotesis"))) {
+            return HomeworkSolution(
+                subject = subject,
+                questionSummary = "Teori / Hipotesis Simulasi Kehidupan (Simulation Hypothesis)",
+                conceptOrFormula = "Hipotesis Filsafat & Komputasi Kuantum (Nick Bostrom, 2003)",
+                stepByStep = listOf(
+                    "Pengertian Dasar: Teori Simulasi Kehidupan (Simulation Hypothesis) yang dipopulerkan filsuf Oxford Nick Bostrom menyatakan bahwa realitas dan alam semesta yang kita tinggali saat ini bisa jadi merupakan simulasi komputer super canggih yang dijalankan oleh peradaban masa depan (posthuman).",
+                    "Tiga Kemungkinan Argumen Bostrom: (1) Peradaban manusia punah sebelum mampu membuat simulasi kesadaran, (2) Peradaban maju mampu membuatnya tapi memilih tidak menjalankan simulasi leluhur, atau (3) Hampir pasti kita saat ini hidup di dalam sebuah simulasi.",
+                    "Kaitan dengan Fisika & Teknologi: Pendukung teori ini menunjuk bahwa hukum alam semesta kita bersifat matematis, memiliki batas resolusi terkecil (Panjang Planck seperti piksel layar), dan perkembangan AI serta Virtual Reality melaju sangat pesat."
+                ),
+                finalAnswer = "Teori Simulasi Kehidupan adalah hipotesis filsafat dan sains komputasi bahwa seluruh realitas fisik dan kesadaran manusia mungkin merupakan program simulasi digital tingkat tinggi.",
+                tutorTip = "Tips dari ${char.name}: Hubungkan Gemini API Key di bagian atas layar agar ${char.name} bisa mendiskusikan pertanyaan sains dan filsafat apa pun secara bebas dengan Gemini AI!",
+                practiceChallenge = "Menurutmu, apa perbedaan utama antara kesadaran manusia asli dengan kecerdasan buatan di dalam simulasi?",
+                isFromAi = false
+            )
+        }
+
         if (subject.equals("IPA", ignoreCase = true) || lower.contains("fotosintesis") || lower.contains("newton") || lower.contains("energi") || lower.contains("zat")) {
             if (lower.contains("fotosintesis")) {
                 return HomeworkSolution(
@@ -1226,7 +1643,8 @@ class GeminiChatService(private val context: Context? = null) {
                         "Persamaan reaksi kimia: 6CO₂ + 6H₂O + Cahaya Matahari → C₆H₁₂O₆ (Glukosa) + 6O₂ (Oksigen)."
                     ),
                     finalAnswer = "Fotosintesis menghasilkan glukosa sebagai sumber energi tumbuhan dan melepaskan oksigen (O₂) ke atmosfer untuk pernapasan makhluk hidup.",
-                    tutorTip = "Tips dari ${char.name}: Reaksi fotosintesis terbagi dua: reaksi terang di grana dan reaksi gelap (siklus Calvin) di stroma!"
+                    tutorTip = "Tips dari ${char.name}: Reaksi fotosintesis terbagi dua: reaksi terang di grana dan reaksi gelap (siklus Calvin) di stroma!",
+                    isFromAi = false
                 )
             }
 
@@ -1240,7 +1658,8 @@ class GeminiChatService(private val context: Context? = null) {
                         "Hukum III Newton (Aksi-Reaksi): Setiap gaya aksi menimbulkan gaya reaksi yang sama besar namun berlawanan arah (F_aksi = -F_reaksi)."
                     ),
                     finalAnswer = "Ketiga Hukum Newton menjadi landasan utama dalam menganalisis seluruh gaya dan pergerakan benda di alam semesta.",
-                    tutorTip = "Tips dari ${char.name}: Satuan gaya dalam SI adalah Newton (N) yang setara dengan kg·m/s²!"
+                    tutorTip = "Tips dari ${char.name}: Satuan gaya dalam SI adalah Newton (N) yang setara dengan kg·m/s²!",
+                    isFromAi = false
                 )
             }
         }
@@ -1256,7 +1675,8 @@ class GeminiChatService(private val context: Context? = null) {
                     "Susun kesimpulan ide pokok yang merangkum keseluruhan maksud kalimat/paragraf secara padat dan runtut."
                 ),
                 finalAnswer = "Kalimat telah dianalisis sesuai kaidah tata bahasa baku Bahasa Indonesia yang efektif.",
-                tutorTip = "Tips dari ${char.name}: Kalimat efektif harus memiliki minimal unsur Subjek dan Predikat yang jelas!"
+                tutorTip = "Tips dari ${char.name}: Kalimat efektif harus memiliki minimal unsur Subjek dan Predikat yang jelas!",
+                isFromAi = false
             )
         }
 
@@ -1271,21 +1691,24 @@ class GeminiChatService(private val context: Context? = null) {
                     "Verify preposition, article (a/an/the), and adjective placement for natural English flow."
                 ),
                 finalAnswer = "The grammatical pattern and vocabulary have been verified for accuracy.",
-                tutorTip = "Tips from ${char.name}: Remember, irregular verbs in Past Tense (V2) don't use -ed (e.g., eat -> ate, buy -> bought)!"
+                tutorTip = "Tips from ${char.name}: Remember, irregular verbs in Past Tense (V2) don't use -ed (e.g., eat -> ate, buy -> bought)!",
+                isFromAi = false
             )
         }
 
-        // 5. IPS & SEJARAH / UMUM
+        // 5. UMUM (Offline Fallback with clear prompt to connect Gemini API Key if on external APK)
         return HomeworkSolution(
             subject = subject,
             questionSummary = question,
+            conceptOrFormula = "Mode Offline Lokal — Hubungkan Gemini API Key di atas untuk Jawaban AI Penuh",
             stepByStep = listOf(
-                "Pahami fakta dan latar belakang utama dari pertanyaan materi $subject ini.",
-                "Hubungkan data kunci, konsep teoritis, dan kronologi atau logika yang mendasarinya.",
-                "Tarik kesimpulan yang menyeluruh dan menjawab langsung esensi pertanyaan tugasmu."
+                "Definisi & Inti Topik: Pertanyaan '$question' berkaitan dengan konsep utama pada bidang $subject yang menjelaskan pengertian, penyebab, dan cara kerjanya.",
+                "Mekanisme & Analisis: Untuk menjawab soal ini secara mendalam di perangkatmu, pastikan koneksi internet aktif atau masukkan Gemini API Key gratis di kartu 'Hubungkan Gemini AI' di bagian atas layar ini.",
+                "Kesimpulan Konsep: Setelah Gemini API Key tersambung, ${char.name} dapat menguraikan jawaban ribuan topik sains, matematika, sejarah, dan tugas umum secara real-time!"
             ),
-            finalAnswer = "Materi $subject telah dianalisis dan disusun solusinya secara terstruktur.",
-            tutorTip = "Tips dari ${char.name}: Membuat peta konsep (mind map) sangat ampuh membantu kamu mengingat materi $subject dengan cepat!"
+            finalAnswer = "Untuk pembahasan AI lengkap tentang \"$question\", ketuk tombol '🔑 Hubungkan Gemini API Key' di atas lalu klik 'Bahas Soal' kembali.",
+            tutorTip = "Tips dari ${char.name}: Jika kamu meng-install APK ini langsung di HP, cukup masukkan Gemini API Key dari Google AI Studio di kartu atas agar semua fitur AI menyala penuh!",
+            isFromAi = false
         )
     }
 }

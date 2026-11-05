@@ -121,10 +121,15 @@ fun HomeworkStudyView(
     onSpeakExplanation: (String) -> Unit,
     onClose: () -> Unit,
     onOpenVoiceInput: () -> Unit,
+    isGeminiConnected: Boolean = true,
+    currentApiKey: String = "",
+    onSaveApiKey: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
+    var showApiKeyCard by remember { mutableStateOf(false) }
+    var apiKeyInput by remember(currentApiKey) { mutableStateOf(currentApiKey) }
 
     // Camera capture launcher (direct thumbnail)
     val cameraLauncher = rememberLauncherForActivityResult(
@@ -217,24 +222,30 @@ fun HomeworkStudyView(
                     }
                 }
 
-                // Character Avatar Badge
+                // Character Avatar & Gemini AI Connection Badge (Tappable to configure API Key on APK)
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = Color.White.copy(alpha = 0.15f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF818CF8).copy(alpha = 0.4f)),
-                    modifier = Modifier.padding(2.dp)
+                    color = if (isGeminiConnected) Color(0xFF10B981).copy(alpha = 0.18f) else Color(0xFFF59E0B).copy(alpha = 0.22f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (isGeminiConnected) Color(0xFF34D399).copy(alpha = 0.55f) else Color(0xFFFBBF24).copy(alpha = 0.65f)
+                    ),
+                    modifier = Modifier
+                        .padding(2.dp)
+                        .clickable { showApiKeyCard = !showApiKeyCard }
+                        .testTag("homework_gemini_status_badge")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                     ) {
-                        Text(text = character.species.emoji, fontSize = 18.sp)
+                        Text(text = if (isGeminiConnected) "✨" else "🔑", fontSize = 14.sp)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Tutor AI",
-                            color = Color(0xFFC7D2FE),
+                            text = if (isGeminiConnected) "Gemini AI Aktif" else "Hubungkan Gemini",
+                            color = if (isGeminiConnected) Color(0xFF6EE7B7) else Color(0xFFFDE68A),
                             fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
@@ -247,6 +258,111 @@ fun HomeworkStudyView(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                // Quick Gemini API Key Configuration Card (shown when user taps badge or when a fallback response occurred on an installed APK)
+                if (showApiKeyCard || (solution != null && !solution.isFromAi && currentApiKey.isBlank())) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF1E1B4B).copy(alpha = 0.92f),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF818CF8)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(text = "🔑", fontSize = 18.sp)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "Hubungkan Gemini API Key (Untuk APK di HP)",
+                                                color = Color.White,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            Text(
+                                                text = "Tempel API Key gratis dari aistudio.google.com/apikey agar AI menjawab semua soal",
+                                                color = Color(0xFFA5B4FC),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                    if (showApiKeyCard) {
+                                        IconButton(
+                                            onClick = { showApiKeyCard = false },
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Close,
+                                                contentDescription = "Tutup",
+                                                tint = Color.White.copy(alpha = 0.7f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                OutlinedTextField(
+                                    value = apiKeyInput,
+                                    onValueChange = { apiKeyInput = it },
+                                    placeholder = {
+                                        Text(
+                                            text = "AIzaSy...",
+                                            color = Color(0xFF64748B),
+                                            fontSize = 12.sp
+                                        )
+                                    },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedBorderColor = Color(0xFF34D399),
+                                        unfocusedBorderColor = Color.White.copy(alpha = 0.25f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("homework_api_key_input")
+                                )
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                Row(
+                                    horizontalArrangement = Arrangement.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            onSaveApiKey(apiKeyInput.trim())
+                                            showApiKeyCard = false
+                                            focusManager.clearFocus()
+                                            if (questionText.isNotBlank() || photoBitmap != null) {
+                                                onSolve(null)
+                                            }
+                                        },
+                                        enabled = apiKeyInput.trim().isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFF10B981),
+                                            contentColor = Color.White
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text(
+                                            text = if (questionText.isNotBlank()) "Simpan & Bahas Ulang Soal ✨" else "Simpan Gemini API Key",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 1. Subject Category Chips
                 item {
                     Text(
@@ -565,12 +681,15 @@ fun HomeworkStudyView(
                                 ) {
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
-                                        color = Color(0xFF10B981).copy(alpha = 0.2f),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f))
+                                        color = if (solution.isFromAi) Color(0xFF10B981).copy(alpha = 0.2f) else Color(0xFFF59E0B).copy(alpha = 0.2f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (solution.isFromAi) Color(0xFF10B981).copy(alpha = 0.4f) else Color(0xFFF59E0B).copy(alpha = 0.4f)
+                                        )
                                     ) {
                                         Text(
-                                            text = "✅ Pembahasan: ${solution.subject}",
-                                            color = Color(0xFF34D399),
+                                            text = if (solution.isFromAi) "✨ Dijawab Gemini AI • ${solution.subject}" else "⚡ Pembahasan Lokal • ${solution.subject}",
+                                            color = if (solution.isFromAi) Color(0xFF34D399) else Color(0xFFFBBF24),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)

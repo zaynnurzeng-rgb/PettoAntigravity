@@ -1,41 +1,48 @@
-# Rencana Implementasi Fitur Baru PawPal AI: Memori Jangka Panjang, Live Camera Vision, & Properti Ruangan Interaktif
+# Rencana Implementasi: Modul Dongeng Petualangan Interaktif Bersama Petto 3D
 
-Berdasarkan pilihan Anda, berikut adalah rencana arsitektur dan alur pengalaman pengguna untuk ketiga fitur yang akan ditambahkan:
-
----
-
-## 1. Memori Jangka Panjang Karakter (*Long-Term Memory & Profil Memori*)
-- **Ekstraksi & Penyimpanan Otomatis (`PetMemoryManager.kt`)**:
-  - Setiap kali Anda mengobrol dengan karakter (melalui suara *Gemini Live*, *Video Call*, atau teks), sistem secara cerdas mendeteksi fakta penting tentang Anda (seperti **Nama Panggilan**, **Hobi/Minat**, **Makanan/Minuman Favorit**, **Pelajaran/Target Sekolah**, atau **Catatan Penting/Curhat Terakhir**) dan menyimpannya secara persisten di perangkat.
-- **Konteks Personal di Semua Percakapan (`GeminiChatService.kt`)**:
-  - Seluruh fakta memori yang tersimpan disuntikkan ke dalam instruksi sistem **Gemini 3.8 Flash** dan **Gemini 4 Argon**, sehingga karakter selalu mengingat nama dan cerita Anda saat menyapa atau menjawab pertanyaan.
-- **Dialog Profil Memori yang Bisa Diedit (`MemoryProfileDialog.kt`)**:
-  - Menambahkan tombol **Memori (`🧠`)** di *Top Bar* ruangan utama untuk membuka dialog **Memori Sahabat Petto**:
-    - Menampilkan daftar hal-hal yang diingat Petto tentang Anda.
-    - Memungkinkan Anda menambah fakta baru secara manual, mengedit profil nama panggilan, atau menghapus item memori tertentu kapan saja.
+## 1. Gambaran Umum Pengalaman Pengguna (UX)
+Kami akan membangun **Modul Dongeng Petualangan Interaktif** berlayar penuh (*Full-Screen 3D Story Stage*) di mana **Petto 3D tampil langsung di atas panggung cerita** dan bereaksi secara ekspresif (*Takjub, Bersemangat, Penasaran, Berpikir, Senang*) sambil membacakan kisah petualangan yang dibuat oleh **Gemini AI** sesuai keputusan Anda.
 
 ---
 
-## 2. Penglihatan Kamera Langsung saat Video Call (*Live Camera Vision*)
-- **Tangkapan Visual Otomatis & Tombol Manual (`FaceToFaceCallView.kt`)**:
-  - **Otomatis saat Berbicara**: Ketika kamera depan/belakang pada kartu *PiP* aktif (`!isCameraMuted`), `PreviewView.bitmap` secara otomatis menangkap *snapshot* visual terbaru dan menyimpannya ke `AvatarViewModel` sehingga setiap kali Anda berbicara dalam *Video Call*, ucapan Anda dikirim bersama gambar kamera ke **Gemini 3.8 Flash Multimodal**.
-  - **Tombol Manual "Lihat Kamera (`👁️ Lihat Aku`)"**: Menambahkan tombol aksi cepat pada layar *Video Call* dan pada kartu *Camera PiP* yang langsung menangkap gambar kamera saat itu juga dan meminta karakter mengomentari apa yang dilihatnya (ekspresi wajah Anda, benda yang Anda pegang, pakaian, atau buku).
-- **Analisis Multimodal Real-Time (`GeminiChatService.kt`)**:
-  - Memperbarui metode percakapan agar menerima `cameraBitmap: Bitmap?` opsional dan mengirimkannya sebagai `inlineData` (`image/jpeg`) ke Gemini 3.8 Flash / Firebase AI Logic sehingga karakter merespons secara ekspresif sesuai kepribadiannya.
+## 2. Fitur Utama yang Akan Dibangun
+
+### A. Layar Penuh Panggung Cerita 3D (`InteractiveStoryStageView.kt`)
+- **Panggung Visual Bertema**: Latar belakang atmosferik yang berubah mengikuti tema cerita (*Hutan Kristal Ajaib*, *Misi Luar Angkasa*, *Misteri Kota Tua*, *Kerajaan Bawah Laut*, atau *Kastil Langit Naga*).
+- **Petto 3D Live Narrator**: Karakter 3D tampil di bagian atas panggung dengan animasi bicara (*lip-sync*), ekspresi emosi dinamis sesuai suasana adegan (`sceneEmotion`), dan gerakan tubuh otomatis.
+- **Kontrol Narasi Suara**: Tombol **Putar Ulang Suara Narasi**, indikator kalimat yang sedang dibacakan Petto, serta tombol kembali yang otomatis menyimpan progres cerita.
+
+### B. Pilihan Cabang A/B + Aksi Bebas (Ketik atau Suara)
+- **2 Tombol Pilihan Cepat (Pilihan A & Pilihan B)**: Dihasilkan secara kontekstual oleh Gemini AI pada setiap bab.
+- **Input Aksi Bebas (Suara & Ketik Sendiri)**:
+  - Pemain dapat mengetik aksi kreatif sendiri (contoh: *"Ajak naga itu makan ikan bakar"* atau *"Gunakan kunci kristal untuk membuka pintu rahasia"*) atau menekan tombol **🎙️ Bicara Aksi** untuk mendiktekan keputusan secara langsung.
+  - Pemain juga bisa mengeklik item di **Tas Inventaris Ajaib** untuk menggunakan item tersebut di dalam cerita.
+
+### C. Sistem Bab, Klimaks & Multi-Ending (`StoryChapter` & `StoryEndingType`)
+- **Progres Bab (Bab 1 hingga Bab 5 - Klimaks/Ending)**:
+  - Dilengkapi bilah progres bab (*Bab 1: Awal Petualangan* → *Bab 2-4: Konflik & Penjelajahan* → *Bab 5: Klimaks & Ending*).
+  - Pemain juga dapat memilih untuk **Lanjut Bab Baru (Endless Mode)** setelah mencapai Ending jika masih ingin melanjutkan petualangan.
+- **Tipe Ending Dinamis**: Gemini AI menentukan hasil akhir cerita berdasarkan keputusan pemain (*Ending Heroik / Legendaris*, *Ending Rahasia / Penemuan Langka*, atau *Ending Lucu / Tak Terduga*) lengkap dengan lencana pencapaian.
+
+### D. Tas Inventaris Item Ajaib (`StoryItem`)
+- Setiap bab dapat menghadiahkan **Item Ajaib / Petunjuk** baru yang ditemukan di dalam cerita (lengkap dengan ikon emoji, nama item, dan deskripsi singkat, misalnya `🗝️ Kunci Bintang Kuno` atau `🧪 Ramuan Cahaya Laut`).
+- Baris **Inventaris Ajaib** ditampilkan di panggung cerita; pemain dapat mengetuk item untuk langsung menggunakannya pada giliran aksi berikutnya.
+
+### E. Penyimpanan & Riwayat Petualangan (`StoryAdventureRepository.kt`)
+- **Auto-Save & Resume**: Setiap bab otomatis tersimpan di penyimpanan lokal (`SharedPreferences` JSON).
+- **Daftar Riwayat Petualangan**: Pemain dapat melanjutkan cerita yang belum tamat kapan saja, melihat daftar item yang sudah dikumpulkan, atau memulai petualangan baru.
 
 ---
 
-## 3. Interaksi Ruangan & Properti 3D (*Interactive Room Props*)
-- **Properti Ruangan Kontekstual per Ruangan (`InteractiveRoomPropsOverlay.kt` & `AvatarRoomScreen.kt`)**:
-  - Menambahkan properti ruangan interaktif yang menyesuaikan dengan tema ruangan aktif dan dapat disentuh langsung:
-    - **🛋️ Ruang Tamu (*Living Room*)**:
-      - **Radio Musik Lo-Fi (`📻`)**: Menyalakan/mematikan alunan nada santai dengan gelombang nada mengambang dan membuat karakter bergoyang senang.
-      - **Bola Mainan (`⚽`)**: Melempar/memantulkan bola untuk mengajak karakter melompat bermain.
-    - **🛏️ Kamar Tidur (*Bedroom*)**:
-      - **Saklar Lampu Tidur (`🏮`)**: Meredupkan pencahayaan ruangan menjadi suasana malam yang hangat dan menenangkan, memicu karakter menguap/rileks.
-      - **Boneka Bintang (`🌟`)**: Memeluk/memainkan properti tidur yang membuat karakter merona senang.
-    - **🍳 Dapur (*Kitchen*)**:
-      - **Sajikan Camilan Segar (`🍓 / 🍔 / 🥛`)**: Memberikan camilan atau susu hangat langsung kepada karakter yang direspons dengan animasi makan/minum 3D dan komentar suara khas tiap karakter.
-      - **Mesin Jus / Teko Hangat (`🍵`)**: Menyeduh minuman hangat dengan efek uap dan reaksi gembira dari karakter.
-- **Reaksi Fisika & Suara Karakter 3D (`Avatar3DCanvas.kt` & `AvatarViewModel.kt`)**:
-  - Setiap interaksi properti ruangan memicu gerakan 3D spesifik (melompat, mengunyah, bergoyang mengikuti musik, atau menguap nyaman), efek partikel kontekstual, serta komentar suara langsung dari karakter.
+## 3. Arsitektur & File yang Akan Dibuat / Diperbarui
+
+1. **`app/src/main/java/com/example/model/FunActivityModels.kt`**:
+   - Menambahkan model data `StoryItem`, `StoryEndingType`, dan `SavedStorySession`, serta memperkaya `StoryNode` dengan `chapterNumber`, `maxChapters`, `sceneEmotion`, `acquiredItem: StoryItem?`, `isEnding: Boolean`, `endingTitle: String?`, dan `endingType: StoryEndingType?`.
+2. **`app/src/main/java/com/example/data/StoryAdventureRepository.kt`** *(File Baru)*:
+   - Mengelola penyimpanan lokal untuk sesi petualangan aktif dan riwayat cerita tersimpan agar bisa dilanjutkan kapan saja.
+3. **`app/src/main/java/com/example/ai/GeminiChatService.kt`**:
+   - Memperbarui generator narasi cabang Gemini AI (`generateStoryNode`) agar menerima daftar **inventaris pemain**, **nomor bab saat ini**, **aksi bebas/pilihan pemain**, serta menghasilkan output terstruktur berisi judul bab, narasi cerita sesuai kepribadian Petto, emosi adegan, item baru yang ditemukan, status ending, dan Pilihan A/B.
+4. **`app/src/main/java/com/example/ui/components/InteractiveStoryStageView.kt`** *(File Baru)*:
+   - Antarmuka layar penuh **Panggung Dongeng Petualangan 3D** dengan kanvas Petto 3D, lencana Bab & Inventaris Item Ajaib, kartu narasi interaktif, tombol Pilihan A/B, kolom aksi bebas + mikrofon suara, serta kartu perayaan Ending.
+5. **`app/src/main/java/com/example/ui/components/FunActivitiesSheet.kt`**, **`AvatarViewModel.kt`**, & **`AvatarRoomScreen.kt`**:
+   - Menghubungkan tab **Dongeng** di menu **Aktivitas Seru** (dan tombol pintas langsung) untuk membuka **Layar Penuh Panggung Dongeng Petualangan 3D**, serta mengelola siklus hidup suara, emosi 3D, inventaris, dan penyimpanan cerita.

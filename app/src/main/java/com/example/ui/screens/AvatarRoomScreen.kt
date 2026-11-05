@@ -109,6 +109,8 @@ import com.example.ui.components.TalkingTomTopHud
 import com.example.ui.components.HomeworkStudyView
 import com.example.ui.components.InteractiveRoomPropsOverlay
 import com.example.ui.components.MemoryProfileDialog
+import com.example.ui.components.FunActivitiesDialog
+import com.example.ui.components.InteractiveStoryStageView
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -353,10 +355,11 @@ fun AvatarRoomScreen(
                     )
                 }
 
-                // Clean Streamlined Bottom Action Dock: Video Call Live, Mode Tugas Sekolah, & Chat (Hands-free voice needs no manual button)
+                // Clean Streamlined Bottom Action Dock: Video Call Live, Mode Tugas Sekolah, Aktivitas Seru & Chat
                 CleanBottomActionDock(
                     onVideoCallClick = { launchFaceToFaceCall() },
                     onHomeworkClick = { viewModel.openHomeworkMode() },
+                    onFunActivitiesClick = { viewModel.openFunActivities() },
                     onChatToggle = { showChatInput = !showChatInput },
                     isChatActive = showChatInput,
                     modifier = Modifier
@@ -488,6 +491,41 @@ fun AvatarRoomScreen(
             )
         }
 
+        if (uiState.showFunActivitiesDialog) {
+            FunActivitiesDialog(
+                character = uiState.activeCharacter,
+                currentTimeOfDay = uiState.currentTimeOfDay,
+                activeTab = uiState.activeFunTab,
+                onSelectTab = { viewModel.selectFunTab(it) },
+                rpsRound = uiState.rpsRound,
+                rpsWins = uiState.rpsWins,
+                rpsDraws = uiState.rpsDraws,
+                rpsLosses = uiState.rpsLosses,
+                onPlayRps = { viewModel.playRockPaperScissors(it) },
+                quizQuestion = uiState.currentQuizQuestion,
+                selectedQuizOption = uiState.selectedQuizOption,
+                quizScore = uiState.quizScore,
+                isGeneratingQuiz = uiState.isGeneratingQuiz,
+                onGenerateQuiz = { topic -> viewModel.generateNewQuiz(topic) },
+                onAnswerQuiz = { viewModel.answerQuizOption(it) },
+                selectedStoryTheme = uiState.selectedStoryTheme,
+                currentStoryNode = uiState.currentStoryNode,
+                isGeneratingStory = uiState.isGeneratingStory,
+                savedStoriesCount = uiState.savedStorySessions.size,
+                onStartStory = { viewModel.startInteractiveStory(it) },
+                onChooseStoryBranch = { chosenText ->
+                    viewModel.chooseStoryBranch(chosenText)
+                },
+                onOpenFullStoryStage = { viewModel.openStoryStageMode() },
+                waterGlassesToday = uiState.waterGlassesToday,
+                stretchCountToday = uiState.stretchCountToday,
+                onTriggerHealthyHabit = { viewModel.triggerHealthyHabit(it) },
+                onTriggerTimeGreeting = { viewModel.triggerTimeOfDayGreeting() },
+                onSpeakText = { viewModel.speakText(it) },
+                onDismiss = { viewModel.closeFunActivities() }
+            )
+        }
+
         // Fullscreen Face-to-Face Live Conversational Call Overlay
         AnimatedVisibility(
             visible = uiState.isFaceToFaceActive,
@@ -528,6 +566,9 @@ fun AvatarRoomScreen(
                 solution = uiState.homeworkSolution,
                 isSolving = uiState.isSolvingHomework,
                 photoBitmap = uiState.homeworkPhotoBitmap,
+                isGeminiConnected = viewModel.isGeminiConnected(),
+                currentApiKey = viewModel.getCustomApiKey(),
+                onSaveApiKey = { viewModel.setCustomApiKey(it) },
                 onSelectSubject = { viewModel.setHomeworkSubject(it) },
                 onQuestionChange = { viewModel.setHomeworkQuestion(it) },
                 onSetPhoto = { viewModel.setHomeworkPhoto(it) },
@@ -535,6 +576,39 @@ fun AvatarRoomScreen(
                 onSpeakExplanation = { viewModel.speakText(it) },
                 onClose = { viewModel.closeHomeworkMode() },
                 onOpenVoiceInput = { viewModel.openVoiceInput() }
+            )
+        }
+
+        // Fullscreen 3D Interactive Story Theater ("Panggung Dongeng Petualangan") Overlay
+        AnimatedVisibility(
+            visible = uiState.showStoryStageMode,
+            enter = fadeIn(tween(300)) + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut(tween(250)) + slideOutVertically(targetOffsetY = { it })
+        ) {
+            BackHandler(enabled = uiState.showStoryStageMode) {
+                viewModel.closeStoryStageMode()
+            }
+
+            InteractiveStoryStageView(
+                character = uiState.activeCharacter,
+                customization = uiState.customization,
+                isTalking = uiState.isTalking,
+                activeIdleBehavior = uiState.activeIdleBehavior,
+                selectedTheme = uiState.selectedStoryTheme,
+                currentNode = uiState.currentStoryNode,
+                inventory = uiState.storyInventory,
+                storyHistoryLog = uiState.storyHistoryLog,
+                savedSessions = uiState.savedStorySessions,
+                isGenerating = uiState.isGeneratingStory,
+                onSelectThemeAndStart = { theme -> viewModel.startInteractiveStory(theme) },
+                onChooseAction = { actionText -> viewModel.chooseStoryBranch(actionText) },
+                onStartNewStory = { viewModel.startInteractiveStory(uiState.selectedStoryTheme) },
+                onResumeSavedSession = { session -> viewModel.resumeSavedStorySession(session) },
+                onDeleteSavedSession = { sessionId -> viewModel.deleteSavedStorySession(sessionId) },
+                onSpeakNarrative = { text -> viewModel.speakText(text) },
+                onOpenVoiceAction = { viewModel.openVoiceInput() },
+                onCharacterTouched = { zone -> viewModel.onCharacterTouched(zone) },
+                onClose = { viewModel.closeStoryStageMode() }
             )
         }
     }
@@ -1048,6 +1122,7 @@ private fun GeminiLiveVoicePill(
  * Streamlined Clean Bottom Action Dock:
  * - Live Video Call with Front Camera PiP
  * - Mode Ngerjain Tugas Sekolah (Homework & Study Companion)
+ * - Aktivitas Seru (Mini Game, Dongeng Interaktif, Rutinitas Sehat)
  * - Keyboard Text Chat Toggle
  * (No manual voice button needed — continuous background "Petto" wake detector handles hands-free Gemini Live)
  */
@@ -1055,6 +1130,7 @@ private fun GeminiLiveVoicePill(
 private fun CleanBottomActionDock(
     onVideoCallClick: () -> Unit,
     onHomeworkClick: () -> Unit,
+    onFunActivitiesClick: () -> Unit,
     onChatToggle: () -> Unit,
     isChatActive: Boolean,
     modifier: Modifier = Modifier
@@ -1071,7 +1147,7 @@ private fun CleanBottomActionDock(
             horizontalArrangement = Arrangement.SpaceEvenly,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
             // 1. Live Video Call (WhatsApp style)
             Button(
@@ -1081,18 +1157,18 @@ private fun CleanBottomActionDock(
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier.testTag("action_video_call_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.Videocam,
                     contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                 )
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(5.dp))
                 Text(
                     text = "Video Call",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -1105,28 +1181,48 @@ private fun CleanBottomActionDock(
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier.testTag("action_homework_button")
             ) {
-                Text(text = "📚", fontSize = 14.sp)
-                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "📚", fontSize = 13.sp)
+                Spacer(modifier = Modifier.width(5.dp))
                 Text(
                     text = "Tugas",
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
 
-            // 3. Chat Keyboard Toggle
+            // 3. Aktivitas Seru (Mini Game, Dongeng, Rutinitas Sehat)
+            Button(
+                onClick = onFunActivitiesClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFD97706),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.testTag("action_fun_activities_button")
+            ) {
+                Text(text = "✨", fontSize = 13.sp)
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = "Aktivitas",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // 4. Chat Keyboard Toggle
             IconButton(
                 onClick = onChatToggle,
                 modifier = Modifier
-                    .size(42.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .background(if (isChatActive) Color(0xFF8B5CF6) else Color.White.copy(alpha = 0.12f))
                     .testTag("action_chat_toggle_button")
             ) {
-                Text(text = "💬", fontSize = 16.sp)
+                Text(text = "💬", fontSize = 15.sp)
             }
         }
     }

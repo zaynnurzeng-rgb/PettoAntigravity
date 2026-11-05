@@ -31,11 +31,22 @@ import com.example.model.TouchZone
 import com.example.model.EarStyle
 import com.example.audio.VoiceEngineMode
 
+import com.example.data.StoryAdventureRepository
 import com.example.model.CareOverlayType
 import com.example.model.FoodItem
+import com.example.model.FunActivityTab
+import com.example.model.HealthyHabitType
 import com.example.model.IdlePetBehavior
 import com.example.model.MemoryFact
 import com.example.model.PetMemoryManager
+import com.example.model.QuizQuestion
+import com.example.model.RpsChoice
+import com.example.model.RpsResult
+import com.example.model.RpsRoundState
+import com.example.model.SavedStorySession
+import com.example.model.StoryItem
+import com.example.model.StoryNode
+import com.example.model.StoryTheme
 import com.example.ui.components.RoomPropAction
 import kotlinx.coroutines.isActive
 
@@ -117,7 +128,29 @@ data class AvatarUiState(
     val liveCameraBitmap: android.graphics.Bitmap? = null,
     // 6. Interactive Room & 3D Props state
     val isLofiRadioPlaying: Boolean = false,
-    val isNightLampDimmed: Boolean = false
+    val isNightLampDimmed: Boolean = false,
+    // Fun Activities Hub (Mini-Game, Interactive Storytelling, Healthy Routines)
+    val showFunActivitiesDialog: Boolean = false,
+    val activeFunTab: FunActivityTab = FunActivityTab.MINI_GAME,
+    val rpsRound: RpsRoundState? = null,
+    val rpsWins: Int = 0,
+    val rpsDraws: Int = 0,
+    val rpsLosses: Int = 0,
+    val currentQuizQuestion: QuizQuestion? = null,
+    val selectedQuizOption: Int? = null,
+    val quizScore: Int = 0,
+    val isGeneratingQuiz: Boolean = false,
+    val selectedStoryTheme: StoryTheme = StoryTheme.CRYSTAL_FOREST,
+    val currentStoryNode: StoryNode? = null,
+    val storyContextHistory: String = "",
+    val isGeneratingStory: Boolean = false,
+    val showStoryStageMode: Boolean = false,
+    val activeStorySessionId: String = "",
+    val storyInventory: List<StoryItem> = emptyList(),
+    val storyHistoryLog: List<String> = emptyList(),
+    val savedStorySessions: List<SavedStorySession> = emptyList(),
+    val waterGlassesToday: Int = 0,
+    val stretchCountToday: Int = 0
 )
 
 data class HomeworkSolution(
@@ -127,7 +160,8 @@ data class HomeworkSolution(
     val finalAnswer: String,
     val tutorTip: String,
     val conceptOrFormula: String = "",
-    val practiceChallenge: String = ""
+    val practiceChallenge: String = "",
+    val isFromAi: Boolean = true
 )
 
 class AvatarViewModel(application: Application) : AndroidViewModel(application) {
@@ -137,6 +171,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
     private val aiService = GeminiChatService(application)
     private val memoryManager = PetMemoryManager(application)
+    private val storyRepository = StoryAdventureRepository(application)
     private var emotionResetJob: Job? = null
     private var callTimerJob: Job? = null
     private var autoListenJob: Job? = null
@@ -576,7 +611,10 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             voiceEngineMode = initialMode,
             customization = _uiState.value.customization.copy(furColor = initialChar.defaultFurColor),
             userNickname = memoryManager.getUserNickname(),
-            memories = memoryManager.getMemories()
+            memories = memoryManager.getMemories(),
+            savedStorySessions = storyRepository.getSavedSessions(),
+            waterGlassesToday = prefs.getInt("water_glasses_today", 0),
+            stretchCountToday = prefs.getInt("stretch_count_today", 0)
         )
 
         ttsEngine.engineMode = initialMode
@@ -650,12 +688,21 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun deliverGreeting(character: PetCharacter, language: AppLanguage) {
+        val timeOfDay = TimeOfDay.fromCurrentHour()
+        val nickname = memoryManager.getUserNickname()
+        val nameSuffix = if (nickname.isNotBlank()) " $nickname" else ""
+        val timeWord = when (timeOfDay) {
+            TimeOfDay.DAWN -> "pagi"
+            TimeOfDay.DAY -> "siang"
+            TimeOfDay.SUNSET -> "sore"
+            TimeOfDay.NIGHT -> "malam"
+        }
         val greetingText = when (character.id) {
-            "zayn" -> "Cih! Aku Zayn. Ngapain kamu ke sini? B-bukan berarti aku seneng ditemenin ya! Cepetan mau apa?!"
-            "siti" -> "Halo sayangku manis, nama Siti. Siti sangat bersyukur bisa mendampingimu hari ini. Ceritakan harimu ya sayang."
-            "rizky" -> "Siap! Rizky siap bertugas! Pertahankan disiplin dan fokus pada target kita hari ini!"
-            "jamal" -> "Hoaaammm... Jamal lagi mager banget nih. Kalau gak ada urusan penting mending kita tidur siang bareng."
-            else -> "HEH! Lu ngeliatin apa?! Gua Heru, jangan cari gara-gara sama gua kalau gak mau kena semprot!"
+            "zayn" -> "Cih! Selamat $timeWord$nameSuffix! Aku Zayn. B-bukan berarti aku seneng ditemenin kamu $timeWord ini ya! Jangan lupa minum air putih!"
+            "siti" -> "Selamat $timeWord sayangku manis$nameSuffix, nama Siti. Siti sangat bersyukur bisa mendampingimu $timeWord ini. Ceritakan harimu ya sayang."
+            "rizky" -> "Siap! Selamat $timeWord$nameSuffix! Rizky siap bertugas! Pertahankan disiplin, kesehatan, dan fokus pada target kita!"
+            "jamal" -> "Hoaaammm... Selamat $timeWord bro$nameSuffix. Jamal lagi santuy banget nih, enak nih kalau kita main atau dengerin cerita bareng."
+            else -> "HEH! Selamat $timeWord$nameSuffix! Gua Heru! Jangan lupa jaga kesehatan lu hari ini kalau gak mau kena semprot!"
         }
 
         speakVoiceOnly(greetingText, AvatarEmotion.HAPPY)
@@ -1046,8 +1093,16 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendVoiceTranscript(text: String) {
+        val wasStoryStage = _uiState.value.showStoryStageMode
+        val wasHomework = _uiState.value.showHomeworkMode
         closeVoiceInput()
-        sendMessage(text)
+        if (wasStoryStage && _uiState.value.currentStoryNode != null) {
+            chooseStoryBranch(text)
+        } else if (wasHomework) {
+            setHomeworkQuestion(text)
+        } else {
+            sendMessage(text)
+        }
     }
 
     fun replayCurrentSpeech() {
@@ -1632,8 +1687,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                // Resolves via Live Gemini 2.0 Flash AI with multimodal photo support or high-precision solver
-                val solution = withTimeoutOrNull(15000L) {
+                // Resolves via Live Gemini AI (Firebase AI Logic or Direct Gemini API Key) with realistic 30s timeout
+                val solution = withTimeoutOrNull(30000L) {
                     aiService.generateHomeworkHelp(subject, q, char, lang, photo)
                 } ?: aiService.solveHomeworkDeterministically(subject, q, char)
 
@@ -1851,6 +1906,396 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 speakVoiceOnly(line, AvatarEmotion.HAPPY)
             }
         }
+    }
+
+    // ========================================================
+    // FUN ACTIVITIES HUB (MINI-GAME, STORYTELLING, HEALTHY ROUTINES)
+    // ========================================================
+
+    fun openFunActivities(tab: FunActivityTab = _uiState.value.activeFunTab) {
+        _uiState.value = _uiState.value.copy(
+            showFunActivitiesDialog = true,
+            activeFunTab = tab,
+            currentTimeOfDay = TimeOfDay.fromCurrentHour()
+        )
+    }
+
+    fun closeFunActivities() {
+        _uiState.value = _uiState.value.copy(showFunActivitiesDialog = false)
+    }
+
+    fun selectFunTab(tab: FunActivityTab) {
+        _uiState.value = _uiState.value.copy(activeFunTab = tab)
+    }
+
+    fun playRockPaperScissors(userChoice: RpsChoice) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        val petChoice = RpsChoice.entries.random()
+
+        val result = when {
+            userChoice == petChoice -> RpsResult.DRAW
+            (userChoice == RpsChoice.ROCK && petChoice == RpsChoice.SCISSORS) ||
+                (userChoice == RpsChoice.SCISSORS && petChoice == RpsChoice.PAPER) ||
+                (userChoice == RpsChoice.PAPER && petChoice == RpsChoice.ROCK) -> RpsResult.WIN
+            else -> RpsResult.LOSE
+        }
+
+        val commentary = when (result) {
+            RpsResult.WIN -> when (char.id) {
+                "zayn" -> "H-hah?! Kok kamu bisa menang lawan aku?! Tadi aku cuma sengaja ngalah dikit ya!"
+                "siti" -> "Yeeay! Kamu menang sayangku! Hebat sekali tebakanmu, Siti ikut senang!"
+                "rizky" -> "Strategi lawan yang luar biasa! Kemenangan mutlak untukmu, komandan!"
+                "jamal" -> "Wah lu menang bro... Jamal telat mikir tadi gara-gara ngantuk, hehe."
+                else -> "APA?! GUA KALAH SUIT?! Pasti lu curang nih, ayo tanding ulang sekarang!"
+            }
+            RpsResult.DRAW -> when (char.id) {
+                "zayn" -> "Cih, seri! Pikiran kita kebetulan aja sama, jangan geer!"
+                "siti" -> "Wah kita seri sayang! Hati kita sehati banget ya, hihi."
+                "rizky" -> "Kekuatan seimbang! Pertahanan dan serangan sama kuat, ayo ulangi!"
+                "jamal" -> "Seri bro~ Emang kita kompak banget kalau soal santai gini."
+                else -> "Hmph, seri! Ayo suit sekali lagi sampai ada yang menang!"
+            }
+            RpsResult.LOSE -> when (char.id) {
+                "zayn" -> "Hehehe, aku menang! Sudah kuduga kamu bakal ngeluarin ${userChoice.label}!"
+                "siti" -> "Hihi, kali ini Siti yang menang sayang. Jangan menyerah ya, ayo coba lagi!"
+                "rizky" -> "Poin taktis untuk Sersan Rizky! Jangan lengah, ayo coba ronde berikutnya!"
+                "jamal" -> "Wih Jamal menang sambil merem nih bro, hoki banget hari ini."
+                else -> "HAHAHA! GUA MENANG TELAK! Makanya jangan remehin beruang pintar kayak gua!"
+            }
+        }
+
+        ttsEngine.playHappyChime()
+        _uiState.value = state.copy(
+            rpsRound = RpsRoundState(
+                userChoice = userChoice,
+                petChoice = petChoice,
+                result = result,
+                commentary = commentary
+            ),
+            rpsWins = state.rpsWins + if (result == RpsResult.WIN) 1 else 0,
+            rpsDraws = state.rpsDraws + if (result == RpsResult.DRAW) 1 else 0,
+            rpsLosses = state.rpsLosses + if (result == RpsResult.LOSE) 1 else 0,
+            activeIdleBehavior = IdlePetBehavior.HAPPY_BOUNCE,
+            currentEmotion = if (result == RpsResult.LOSE) AvatarEmotion.SURPRISED else AvatarEmotion.HAPPY,
+            liveUserSpeech = "Suit: ${userChoice.emoji} ${userChoice.label}"
+        )
+        speakVoiceOnly(commentary, AvatarEmotion.HAPPY)
+    }
+
+    fun generateNewQuiz(topic: String) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        _uiState.value = state.copy(
+            isGeneratingQuiz = true,
+            selectedQuizOption = null
+        )
+
+        viewModelScope.launch {
+            try {
+                val quiz = aiService.generateQuizQuestion(topic, char)
+                _uiState.value = _uiState.value.copy(
+                    currentQuizQuestion = quiz,
+                    selectedQuizOption = null,
+                    isGeneratingQuiz = false,
+                    currentEmotion = AvatarEmotion.TALKING
+                )
+                speakVoiceOnly("Pertanyaan kuis $topic: ${quiz.question}", AvatarEmotion.TALKING)
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error generating quiz: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(isGeneratingQuiz = false)
+            }
+        }
+    }
+
+    fun answerQuizOption(selectedIndex: Int) {
+        val state = _uiState.value
+        val quiz = state.currentQuizQuestion ?: return
+        if (state.selectedQuizOption != null) return
+
+        val isCorrect = selectedIndex == quiz.correctIndex
+        val newScore = if (isCorrect) state.quizScore + 10 else state.quizScore
+        val char = state.activeCharacter
+
+        val spokenReaction = if (isCorrect) {
+            "Betul sekali! +10 poin! ${quiz.explanation}"
+        } else {
+            val rightAns = quiz.options.getOrElse(quiz.correctIndex) { "" }
+            "Hampir tepat! Jawaban yang benar adalah $rightAns. ${quiz.explanation}"
+        }
+
+        ttsEngine.playHappyChime()
+        _uiState.value = state.copy(
+            selectedQuizOption = selectedIndex,
+            quizScore = newScore,
+            activeIdleBehavior = if (isCorrect) IdlePetBehavior.HAPPY_BOUNCE else IdlePetBehavior.LOOKING_AROUND,
+            currentEmotion = if (isCorrect) AvatarEmotion.HAPPY else AvatarEmotion.SURPRISED
+        )
+        speakVoiceOnly(spokenReaction, if (isCorrect) AvatarEmotion.HAPPY else AvatarEmotion.TALKING)
+    }
+
+    fun openStoryStageMode() {
+        val state = _uiState.value
+        val saved = storyRepository.getSavedSessions()
+        // If no current story node is loaded yet, auto-load the most recent saved session or start a new one
+        if (state.currentStoryNode == null) {
+            val latestSession = saved.firstOrNull()
+            if (latestSession != null) {
+                _uiState.value = state.copy(
+                    showFunActivitiesDialog = false,
+                    showStoryStageMode = true,
+                    activeStorySessionId = latestSession.sessionId,
+                    selectedStoryTheme = latestSession.theme,
+                    currentStoryNode = latestSession.currentNode,
+                    storyInventory = latestSession.inventory,
+                    storyHistoryLog = latestSession.storyHistoryLog,
+                    storyContextHistory = latestSession.storyHistoryLog.joinToString("\n"),
+                    savedStorySessions = saved,
+                    currentEmotion = latestSession.currentNode.sceneEmotion
+                )
+                speakVoiceOnly(latestSession.currentNode.narrative, latestSession.currentNode.sceneEmotion)
+                return
+            } else {
+                _uiState.value = state.copy(
+                    showFunActivitiesDialog = false,
+                    showStoryStageMode = true,
+                    savedStorySessions = saved
+                )
+                startInteractiveStory(state.selectedStoryTheme)
+                return
+            }
+        }
+        _uiState.value = state.copy(
+            showFunActivitiesDialog = false,
+            showStoryStageMode = true,
+            savedStorySessions = saved
+        )
+    }
+
+    fun closeStoryStageMode() {
+        _uiState.value = _uiState.value.copy(
+            showStoryStageMode = false,
+            currentEmotion = AvatarEmotion.IDLE
+        )
+    }
+
+    fun startInteractiveStory(theme: StoryTheme) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        val newSessionId = "story_${theme.name.lowercase()}_${System.currentTimeMillis()}"
+        _uiState.value = state.copy(
+            showFunActivitiesDialog = false,
+            showStoryStageMode = true,
+            activeStorySessionId = newSessionId,
+            selectedStoryTheme = theme,
+            currentStoryNode = null,
+            storyInventory = emptyList(),
+            storyHistoryLog = emptyList(),
+            isGeneratingStory = true,
+            storyContextHistory = ""
+        )
+
+        viewModelScope.launch {
+            try {
+                val firstNode = aiService.generateStoryNode(
+                    theme = theme,
+                    chapter = 1,
+                    maxChapters = 5,
+                    previousStory = "",
+                    chosenOption = null,
+                    inventory = emptyList(),
+                    character = char,
+                    userNickname = state.userNickname
+                )
+                val updatedInventory = if (firstNode.acquiredItem != null) {
+                    listOf(firstNode.acquiredItem)
+                } else {
+                    emptyList()
+                }
+                val initialHistoryLog = listOf("Babak 1 (${firstNode.title}): ${firstNode.narrative}")
+                val session = SavedStorySession(
+                    sessionId = newSessionId,
+                    theme = theme,
+                    characterId = char.id,
+                    currentNode = firstNode,
+                    storyHistoryLog = initialHistoryLog,
+                    inventory = updatedInventory,
+                    updatedAtEpochMs = System.currentTimeMillis()
+                )
+                val updatedSaved = storyRepository.saveOrUpdateSession(session)
+
+                _uiState.value = _uiState.value.copy(
+                    currentStoryNode = firstNode,
+                    storyContextHistory = firstNode.narrative,
+                    storyHistoryLog = initialHistoryLog,
+                    storyInventory = updatedInventory,
+                    savedStorySessions = updatedSaved,
+                    isGeneratingStory = false,
+                    activeIdleBehavior = IdlePetBehavior.HAPPY_BOUNCE,
+                    currentEmotion = firstNode.sceneEmotion
+                )
+                speakVoiceOnly(firstNode.narrative, firstNode.sceneEmotion)
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error starting story: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(isGeneratingStory = false)
+            }
+        }
+    }
+
+    fun chooseStoryBranch(chosenOptionText: String) {
+        val state = _uiState.value
+        val currentNode = state.currentStoryNode ?: return
+        val nextChapter = currentNode.chapterNumber + 1
+        val char = state.activeCharacter
+        val sessionId = state.activeStorySessionId.ifBlank {
+            "story_${state.selectedStoryTheme.name.lowercase()}_${System.currentTimeMillis()}"
+        }
+
+        _uiState.value = state.copy(
+            isGeneratingStory = true,
+            activeStorySessionId = sessionId,
+            currentEmotion = AvatarEmotion.SURPRISED
+        )
+
+        viewModelScope.launch {
+            try {
+                val nextNode = aiService.generateStoryNode(
+                    theme = state.selectedStoryTheme,
+                    chapter = nextChapter,
+                    maxChapters = currentNode.maxChapters,
+                    previousStory = state.storyContextHistory,
+                    chosenOption = chosenOptionText,
+                    inventory = state.storyInventory,
+                    character = char,
+                    userNickname = state.userNickname
+                )
+                val updatedHistory = "${state.storyContextHistory}\n[Keputusan: $chosenOptionText]\n${nextNode.narrative}"
+                val updatedLog = state.storyHistoryLog +
+                    "[Keputusan: $chosenOptionText]" +
+                    "Babak $nextChapter (${nextNode.title}): ${nextNode.narrative}"
+
+                val updatedInventory = if (nextNode.acquiredItem != null &&
+                    state.storyInventory.none { it.name.equals(nextNode.acquiredItem.name, ignoreCase = true) }
+                ) {
+                    state.storyInventory + nextNode.acquiredItem
+                } else {
+                    state.storyInventory
+                }
+
+                val session = SavedStorySession(
+                    sessionId = sessionId,
+                    theme = state.selectedStoryTheme,
+                    characterId = char.id,
+                    currentNode = nextNode,
+                    storyHistoryLog = updatedLog,
+                    inventory = updatedInventory,
+                    updatedAtEpochMs = System.currentTimeMillis()
+                )
+                val updatedSaved = storyRepository.saveOrUpdateSession(session)
+
+                ttsEngine.playHappyChime()
+                _uiState.value = _uiState.value.copy(
+                    currentStoryNode = nextNode,
+                    storyContextHistory = updatedHistory,
+                    storyHistoryLog = updatedLog,
+                    storyInventory = updatedInventory,
+                    savedStorySessions = updatedSaved,
+                    isGeneratingStory = false,
+                    activeIdleBehavior = IdlePetBehavior.HAPPY_BOUNCE,
+                    currentEmotion = nextNode.sceneEmotion
+                )
+                speakVoiceOnly(nextNode.narrative, nextNode.sceneEmotion)
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error advancing story branch: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(isGeneratingStory = false)
+            }
+        }
+    }
+
+    fun resumeSavedStorySession(session: SavedStorySession) {
+        _uiState.value = _uiState.value.copy(
+            showFunActivitiesDialog = false,
+            showStoryStageMode = true,
+            activeStorySessionId = session.sessionId,
+            selectedStoryTheme = session.theme,
+            currentStoryNode = session.currentNode,
+            storyInventory = session.inventory,
+            storyHistoryLog = session.storyHistoryLog,
+            storyContextHistory = session.storyHistoryLog.joinToString("\n"),
+            currentEmotion = session.currentNode.sceneEmotion
+        )
+        speakVoiceOnly(session.currentNode.narrative, session.currentNode.sceneEmotion)
+    }
+
+    fun deleteSavedStorySession(sessionId: String) {
+        val updated = storyRepository.deleteSession(sessionId)
+        _uiState.value = _uiState.value.copy(savedStorySessions = updated)
+    }
+
+    fun triggerHealthyHabit(habit: HealthyHabitType) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        ttsEngine.playHappyChime()
+
+        when (habit) {
+            HealthyHabitType.DRINK_WATER -> {
+                val newWater = (state.waterGlassesToday + 1).coerceAtMost(12)
+                prefs.edit().putInt("water_glasses_today", newWater).apply()
+                val msg = when (char.id) {
+                    "zayn" -> "Glek glek! Bagus, kamu udah minum $newWater gelas air putih hari ini. Jangan sampai dehidrasi ya!"
+                    "siti" -> "Alhamdulillah, segar sekali sayang! Sudah $newWater gelas air putih hari ini, tubuhmu pasti makin sehat."
+                    "rizky" -> "Hidrasi terkonfirmasi! Gelas ke-$newWater berhasil diminum! Jaga stamina tetap prima!"
+                    "jamal" -> "Seger banget bro air putihnya... udah $newWater gelas nih hari ini, mantap."
+                    else -> "BAGUS! Minum air putih yang rajin! Udah $newWater gelas nih, pertahankan!"
+                }
+                _uiState.value = state.copy(
+                    waterGlassesToday = newWater,
+                    activeIdleBehavior = IdlePetBehavior.HAPPY_BOUNCE,
+                    currentEmotion = AvatarEmotion.HAPPY,
+                    liveUserSpeech = "💧 Minum Air Putih ($newWater/8)"
+                )
+                speakVoiceOnly(msg, AvatarEmotion.HAPPY)
+            }
+
+            HealthyHabitType.BODY_STRETCH -> {
+                val newStretch = state.stretchCountToday + 1
+                prefs.edit().putInt("stretch_count_today", newStretch).apply()
+                val msg = "Ayo rentangkan tangan ke atas dan putar bahumu pelan-pelan bersama ${char.name}... Nah, badan jadi enteng dan segar lagi kan!"
+                _uiState.value = state.copy(
+                    stretchCountToday = newStretch,
+                    activeIdleBehavior = IdlePetBehavior.STRETCHING,
+                    currentEmotion = AvatarEmotion.HAPPY,
+                    liveUserSpeech = "🧘 Peregangan Badan Bersama"
+                )
+                speakVoiceOnly(msg, AvatarEmotion.HAPPY)
+            }
+
+            HealthyHabitType.EYE_REST -> {
+                val msg = "Sekarang alihkan pandanganmu dari layar HP ke objek jauh selama 20 detik sambil berkedip santai... Matamu pasti terasa lebih adem!"
+                _uiState.value = state.copy(
+                    activeIdleBehavior = IdlePetBehavior.LOOKING_AROUND,
+                    currentEmotion = AvatarEmotion.LOVING,
+                    liveUserSpeech = "👀 Istirahat Mata 20-20-20"
+                )
+                speakVoiceOnly(msg, AvatarEmotion.LOVING)
+            }
+
+            HealthyHabitType.DEEP_BREATH -> {
+                val msg = "Mari tarik napas dalam-dalam lewat hidung... tahan sebentar... lalu hembuskan perlahan lewat mulut. Pikiran jadi jauh lebih tenang!"
+                _uiState.value = state.copy(
+                    activeIdleBehavior = IdlePetBehavior.YAWNING,
+                    currentEmotion = AvatarEmotion.LOVING,
+                    liveUserSpeech = "🌿 Napas Relaksasi"
+                )
+                speakVoiceOnly(msg, AvatarEmotion.LOVING)
+            }
+        }
+    }
+
+    fun triggerTimeOfDayGreeting() {
+        val current = TimeOfDay.fromCurrentHour()
+        _uiState.value = _uiState.value.copy(currentTimeOfDay = current)
+        deliverGreeting(_uiState.value.activeCharacter, _uiState.value.selectedLanguage)
     }
 
     override fun onCleared() {
