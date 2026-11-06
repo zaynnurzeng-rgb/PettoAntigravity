@@ -3,6 +3,7 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.ai.GeminiChatService
 import com.example.ai.GeminiLiveSessionClient
 import com.example.audio.ContinuousMicWakeDetector
@@ -1361,14 +1362,13 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         // Connect real-time Gemini 3.8 Live WebSocket session if API key is available
-        val apiKey = aiService.getEffectiveApiKey()
+        val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isNotBlank()) {
             val liveSysPrompt = aiService.buildLiveSystemInstruction(
                 character = char,
                 language = _uiState.value.selectedLanguage
             )
             geminiLiveClient.connect(
-                apiKey = apiKey,
                 character = char,
                 language = _uiState.value.selectedLanguage,
                 systemInstruction = liveSysPrompt
