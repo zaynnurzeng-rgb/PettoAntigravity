@@ -48,7 +48,8 @@ data class VoiceAudioAnalysisResult(
     val isWakeOnly: Boolean,
     val transcript: String = "",
     val replyText: String = "",
-    val emotion: AvatarEmotion = AvatarEmotion.TALKING
+    val emotion: AvatarEmotion = AvatarEmotion.TALKING,
+    val isOfflineFallback: Boolean = false
 )
 
 class GeminiChatService(private val context: Context? = null) {
@@ -447,6 +448,7 @@ class GeminiChatService(private val context: Context? = null) {
 
         // 1. Try Gemini REST API with multimodal inlineData (audio/wav) if real API key is configured
         val apiKey = getEffectiveApiKey()
+        Log.i(TAG, "Voice analysis: standby=" + isStandbyWakeMode + ", durationMs=" + durationMs + ", wavBytes=" + wavBytes.size + ", keyConfigured=" + apiKey.isNotBlank())
         if (apiKey.isNotBlank()) {
             try {
                 val jsonResp = withTimeoutOrNull(14000L) {
@@ -466,8 +468,10 @@ class GeminiChatService(private val context: Context? = null) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.d(TAG, "Gemini audio REST analysis fallback: ${e.message}")
+                Log.w(TAG, "Gemini audio REST analysis failed: " + e.message)
             }
+        } else {
+            Log.w(TAG, "Gemini audio REST skipped: no usable API key (empty or placeholder MY_GEMINI_API_KEY)")
         }
 
         // 2. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) with multimodal audio inlineData
@@ -495,16 +499,16 @@ class GeminiChatService(private val context: Context? = null) {
             Log.d(TAG, "Firebase AI audio analysis skipped: ${e.message}")
         }
 
-        // 3. Offline / Deterministic Voice Activity Fallback so wake word "Petto" and Live Session always work
+        // 3. Offline fallback: never fabricate a wake word. Report honestly so the UI can inform the user.
+        Log.w(TAG, "Voice analysis offline: REST and Firebase AI both unavailable (durationMs=" + durationMs + ")")
         if (isStandbyWakeMode) {
-            // Clear voice call utterance length (300ms..2600ms) triggers wake response offline
-            val isLikelyWakeCall = durationMs in 280L..2800L
             return@withContext VoiceAudioAnalysisResult(
-                wakeDetected = isLikelyWakeCall,
-                isWakeOnly = true,
-                transcript = if (isLikelyWakeCall) "Petto" else "",
+                wakeDetected = false,
+                isWakeOnly = false,
+                transcript = "",
                 replyText = "",
-                emotion = AvatarEmotion.SURPRISED
+                emotion = AvatarEmotion.SURPRISED,
+                isOfflineFallback = true
             )
         } else {
             val offlineReply = when (character.id) {
@@ -519,7 +523,8 @@ class GeminiChatService(private val context: Context? = null) {
                 isWakeOnly = false,
                 transcript = "(Suara pengguna)",
                 replyText = offlineReply,
-                emotion = AvatarEmotion.TALKING
+                emotion = AvatarEmotion.TALKING,
+                isOfflineFallback = true
             )
         }
     }
@@ -602,10 +607,16 @@ class GeminiChatService(private val context: Context? = null) {
             .build()
 
         client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return ""
-            val respString = response.body?.string() ?: return ""
+            val respString = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Gemini audio HTTP " + response.code + " model=" + modelName + " body=" + respString.take(400))
+                return ""
+            }
             val respJson = JSONObject(respString)
-            val candidates = respJson.optJSONArray("candidates") ?: return ""
+            val candidates = respJson.optJSONArray("candidates") ?: run {
+                Log.w(TAG, "Gemini audio response missing candidates: " + respString.take(400))
+                return ""
+            }
             if (candidates.length() > 0) {
                 val first = candidates.getJSONObject(0)
                 val content = first.optJSONObject("content")
