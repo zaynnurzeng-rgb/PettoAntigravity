@@ -190,6 +190,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     private var isSpeakingWakeAck: Boolean = false
     private var isSpeakingVoiceReply: Boolean = false
     private var ttsWatchdogJob: Job? = null
+    private var wakeGuardJob: Job? = null
     private var lastVoiceUnavailableNoticeMs: Long = 0L
 
     private val micWakeDetector = ContinuousMicWakeDetector(
@@ -293,7 +294,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         )
         if (!isSpeaking) {
             ttsWatchdogJob?.cancel()
-            Log.d("AvatarViewModel", "TTS done: faceToFace=" + _uiState.value.isFaceToFaceActive + " wakeAck=" + isSpeakingWakeAck + " voiceReply=" + isSpeakingVoiceReply)
+            Log.d("AvatarViewModel", "TTS done: faceToFace=" + _uiState.value.isFaceToFaceActive + " wakeAck=" + isSpeakingWakeAck + " voiceReply=" + isSpeakingVoiceReply + " handsFree=" + _uiState.value.isHandsFreeWakeEnabled + " voiceDialog=" + _uiState.value.showVoiceDialog + " session=" + _uiState.value.voiceSessionState)
             if (_uiState.value.isFaceToFaceActive && !_uiState.value.isFaceToFaceMuted) {
                 onAvatarFinishedSpeakingInCall()
             } else if (isSpeakingWakeAck) {
@@ -446,10 +447,14 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun enterGeminiLiveListeningAfterSpeech(delayMs: Long = 250L) {
         wakeListenJob?.cancel()
-        if (_uiState.value.isFaceToFaceActive || _uiState.value.showVoiceDialog) return
+        if (_uiState.value.isFaceToFaceActive || _uiState.value.showVoiceDialog) {
+            Log.d("AvatarViewModel", "enterLiveListen skipped: faceToFace=" + _uiState.value.isFaceToFaceActive + " voiceDialog=" + _uiState.value.showVoiceDialog)
+            return
+        }
         wakeListenJob = viewModelScope.launch {
             delay(delayMs)
             if (!_uiState.value.isTalking && !_uiState.value.isFaceToFaceActive && !_uiState.value.showVoiceDialog) {
+                Log.d("AvatarViewModel", "enterLiveListen: mic unpaused, GEMINI_LIVE_LISTENING")
                 _uiState.value = _uiState.value.copy(
                     voiceSessionState = VoiceSessionState.GEMINI_LIVE_LISTENING,
                     isWakeCommandListening = true
@@ -470,11 +475,13 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             isSpeakingVoiceReply ||
             _uiState.value.showVoiceDialog
         ) {
+            Log.d("AvatarViewModel", "resumeWake skipped: handsFree=" + _uiState.value.isHandsFreeWakeEnabled + " faceToFace=" + _uiState.value.isFaceToFaceActive + " talking=" + _uiState.value.isTalking + " wakeAck=" + isSpeakingWakeAck + " voiceReply=" + isSpeakingVoiceReply + " voiceDialog=" + _uiState.value.showVoiceDialog)
             return
         }
         wakeListenJob = viewModelScope.launch {
             delay(delayMs)
             if (!_uiState.value.isTalking && !_uiState.value.isFaceToFaceActive && !_uiState.value.showVoiceDialog) {
+                Log.d("AvatarViewModel", "resumeWake: restoring STANDBY_WAKE, mic unpaused")
                 _uiState.value = _uiState.value.copy(
                     voiceSessionState = VoiceSessionState.STANDBY_WAKE,
                     isWakeCommandListening = false
@@ -653,6 +660,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         }
         try {
             val isCurrentlyTalking = _uiState.value.isTalking || isSpeakingWakeAck || isSpeakingVoiceReply
+            Log.d("AvatarViewModel", "startHandsFreeWake: talking=" + isCurrentlyTalking + " session=" + _uiState.value.voiceSessionState + " paused=" + micWakeDetector.isPaused)
             micWakeDetector.setLiveSessionMode(
                 _uiState.value.voiceSessionState == VoiceSessionState.GEMINI_LIVE_LISTENING
             )
@@ -677,6 +685,30 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                         _uiState.value = _uiState.value.copy(faceToFaceCallState = FaceToFaceCallState.LISTENING)
                         speechRecognitionHelper.startListening(_uiState.value.selectedLanguage)
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * Self-healing heartbeat: if a missed TTS callback (or any guard) leaves the mic paused while idle
+     * in standby, force it back on. Without this, one missed callback silences the app until restart.
+     */
+    private fun startWakeGuardLoop() {
+        wakeGuardJob?.cancel()
+        wakeGuardJob = viewModelScope.launch {
+            while (isActive) {
+                delay(2000L)
+                val s = _uiState.value
+                if (s.isHandsFreeWakeEnabled && !s.isFaceToFaceActive && !s.isTalking &&
+                    !isSpeakingWakeAck && !isSpeakingVoiceReply && !s.showVoiceDialog &&
+                    s.voiceSessionState == VoiceSessionState.STANDBY_WAKE
+                ) {
+                    if (micWakeDetector.isPaused) {
+                        Log.w("AvatarViewModel", "Wake guard: mic was paused in standby -> resuming")
+                        micWakeDetector.setPaused(false)
+                    }
+                    micWakeDetector.start()
                 }
             }
         }
@@ -707,6 +739,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
         ttsEngine.setVoiceProfile(initialChar.defaultVoicePitch, initialChar.defaultSpeechRate)
         ttsEngine.setLanguage(_uiState.value.selectedLanguage)
+
+        startWakeGuardLoop()
 
         viewModelScope.launch {
             delay(500)
