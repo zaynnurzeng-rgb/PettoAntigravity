@@ -71,7 +71,13 @@ class ContinuousMicWakeDetector(
     @Volatile
     private var lastLiveActivityElapsedMs: Long = SystemClock.elapsedRealtime()
 
+    val isPaused: Boolean
+        get() = isPausedForTts
+
     fun setPaused(paused: Boolean) {
+        if (isPausedForTts != paused) {
+            Log.d(TAG, "setPaused(" + paused + ")")
+        }
         isPausedForTts = paused
         if (!paused) {
             lastLiveActivityElapsedMs = SystemClock.elapsedRealtime()
@@ -144,6 +150,7 @@ class ContinuousMicWakeDetector(
                 var peakUiRms = 0f
                 var lastRmsUiEmitMs = 0L
                 var lastEmittedUiRms = 0f
+                var lastVadLogMs = 0L
 
                 lastLiveActivityElapsedMs = SystemClock.elapsedRealtime()
 
@@ -193,6 +200,11 @@ class ContinuousMicWakeDetector(
                     val voiceThreshold = max(520.0, adaptiveNoiseFloorRms * 2.35)
                     val isVoiceFrame = rmsAmplitude >= voiceThreshold
 
+                    if (now - lastVadLogMs >= 3000L) {
+                        lastVadLogMs = now
+                        Log.d(TAG, "VAD rms=" + rmsAmplitude.toInt() + " threshold=" + voiceThreshold.toInt() + " floor=" + adaptiveNoiseFloorRms.toInt() + " speaking=" + isSpeaking + " live=" + isLiveSessionMode)
+                    }
+
                     if (!isSpeaking) {
                         // Slowly adapt noise floor during silence
                         if (!isVoiceFrame) {
@@ -220,6 +232,7 @@ class ContinuousMicWakeDetector(
                                 }
                                 preRollQueue.clear()
                                 lastLiveActivityElapsedMs = now
+                                Log.d(TAG, "Speech start: rms=" + rmsAmplitude.toInt() + " threshold=" + voiceThreshold.toInt() + " floor=" + adaptiveNoiseFloorRms.toInt())
                                 onSpeechActivityChanged(true)
                             }
                         } else {
@@ -260,7 +273,10 @@ class ContinuousMicWakeDetector(
 
                             if (totalDuration >= MIN_SPEECH_MS && pcmBytes.isNotEmpty()) {
                                 val wavBytes = wrapPcmInWavHeader(pcmBytes, SAMPLE_RATE)
+                                Log.d(TAG, "Segment captured: " + totalDuration + "ms, " + wavBytes.size + " bytes, peak=" + capturedPeak)
                                 onVoiceSegmentCaptured(wavBytes, totalDuration, capturedPeak)
+                            } else {
+                                Log.d(TAG, "Segment dropped: duration=" + totalDuration + "ms, bytes=" + pcmBytes.size)
                             }
                         }
                     }
