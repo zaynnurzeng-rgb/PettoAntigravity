@@ -7,6 +7,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Base64
 import android.util.Log
+import com.example.BuildConfig
 import com.example.model.AppLanguage
 import com.example.model.PetCharacter
 import kotlinx.coroutines.CoroutineScope
@@ -70,11 +71,11 @@ class GeminiLiveSessionClient(
     private val currentTurnTranscript = StringBuilder()
 
     fun connect(
-        apiKey: String,
         character: PetCharacter,
         language: AppLanguage,
         systemInstruction: String
     ) {
+        val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isBlank()) {
             onConnectionStateChanged(false, "")
             return
