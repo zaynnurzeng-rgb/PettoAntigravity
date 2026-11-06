@@ -84,6 +84,14 @@ class GeminiChatService(private val context: Context? = null) {
         .callTimeout(22, TimeUnit.SECONDS)
         .build()
 
+    // Shorter hard bound for voice chunks: a slow model must not stall the whole conversation.
+    private val audioClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(16, TimeUnit.SECONDS)
+        .build()
+
     @Volatile
     var lastAiCallSucceeded: Boolean = false
         private set
@@ -229,9 +237,9 @@ class GeminiChatService(private val context: Context? = null) {
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             val restModelsOrder = when (activeTier) {
-                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-4-argon", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.8-flash")
-                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-flash")
-                else -> listOf("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash")
+                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-4-argon", "gemini-3.8-flash", "gemini-3.1-flash-lite")
+                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash")
+                else -> listOf("gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite")
             }
             try {
                 val restResult = withTimeoutOrNull(20000L) {
@@ -451,13 +459,19 @@ class GeminiChatService(private val context: Context? = null) {
         Log.i(TAG, "Voice analysis: standby=" + isStandbyWakeMode + ", durationMs=" + durationMs + ", wavBytes=" + wavBytes.size + ", keyConfigured=" + apiKey.isNotBlank())
         if (apiKey.isNotBlank()) {
             try {
-                val jsonResp = withTimeoutOrNull(14000L) {
-                    val r25 = callGeminiAudioJson("gemini-2.5-flash", apiKey, prompt, wavBytes)
-                    if (r25.isNotBlank()) r25
-                    else {
-                        val r20 = callGeminiAudioJson("gemini-2.0-flash", apiKey, prompt, wavBytes)
-                        if (r20.isNotBlank()) r20 else callGeminiAudioJson("gemini-3.8-flash", apiKey, prompt, wavBytes)
+                val audioModels = listOf("gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash")
+                val jsonResp = withTimeoutOrNull(48000L) {
+                    var found = ""
+                    for (m in audioModels) {
+                        val started = System.currentTimeMillis()
+                        val r = callGeminiAudioJson(m, apiKey, prompt, wavBytes)
+                        Log.d(TAG, "Audio model " + m + " -> " + (if (r.isBlank()) "empty" else "ok") + " in " + (System.currentTimeMillis() - started) + "ms")
+                        if (r.isNotBlank()) {
+                            found = r
+                            break
+                        }
                     }
+                    found
                 }
                 if (!jsonResp.isNullOrBlank()) {
                     parseVoiceAudioJson(jsonResp, character)?.let {
@@ -606,7 +620,7 @@ class GeminiChatService(private val context: Context? = null) {
             .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
-        client.newCall(request).execute().use { response ->
+        audioClient.newCall(request).execute().use { response ->
             val respString = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 Log.w(TAG, "Gemini audio HTTP " + response.code + " model=" + modelName + " body=" + respString.take(400))
@@ -676,16 +690,16 @@ class GeminiChatService(private val context: Context? = null) {
             }
         """.trimIndent()
 
-        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-2.5-flash -> gemini-2.0-flash -> gemini-3.8-flash)
+        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-3.5-flash-lite)
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
                 val jsonResponse = withTimeoutOrNull(24000L) {
-                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, photoBitmap)
-                    if (r25.isNotBlank()) r25
+                    val r38 = callGeminiJson("gemini-3.8-flash", apiKey, prompt, photoBitmap)
+                    if (r38.isNotBlank()) r38
                     else {
-                        val r20 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, photoBitmap)
-                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-3.8-flash", apiKey, prompt, photoBitmap)
+                        val r31 = callGeminiJson("gemini-3.1-flash-lite", apiKey, prompt, photoBitmap)
+                        if (r31.isNotBlank()) r31 else callGeminiJson("gemini-3.5-flash-lite", apiKey, prompt, photoBitmap)
                     }
                 }
 
@@ -1108,11 +1122,11 @@ class GeminiChatService(private val context: Context? = null) {
         if (apiKey.isNotBlank()) {
             try {
                 val rest = withTimeoutOrNull(18000L) {
-                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, null)
-                    if (r25.isNotBlank()) r25
+                    val r38 = callGeminiJson("gemini-3.8-flash", apiKey, prompt, null)
+                    if (r38.isNotBlank()) r38
                     else {
-                        val r20 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, null)
-                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-3.8-flash", apiKey, prompt, null)
+                        val r31 = callGeminiJson("gemini-3.1-flash-lite", apiKey, prompt, null)
+                        if (r31.isNotBlank()) r31 else callGeminiJson("gemini-3.5-flash-lite", apiKey, prompt, null)
                     }
                 }
                 if (!rest.isNullOrBlank()) {
