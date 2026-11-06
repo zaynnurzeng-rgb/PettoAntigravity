@@ -147,18 +147,24 @@ class NeuralTtsClient(
 
         val expressiveStylePrompt = buildExpressiveTtsPrompt(cleanText, character, language)
 
-        // Prioritized Gemini Audio/TTS models:
-        // 1. gemini-2.5-flash-preview-tts (dedicated expressive TTS model)
-        // 2. gemini-2.0-flash-exp (multimodal native audio output model)
-        // 3. gemini-3.8-flash-tts & gemini-3.1-flash-tts-preview
+        // Prioritized Gemini Audio/TTS models. gemini-2.0-flash-exp was removed
+        // from the API (HTTP 404), so it is no longer worth a round trip.
         val modelsToTry = listOf(
-            "gemini-2.5-flash-preview-tts",
-            "gemini-2.0-flash-exp",
             "gemini-3.8-flash-tts",
-            "gemini-3.1-flash-tts-preview"
+            "gemini-3.1-flash-tts-preview",
+            "gemini-2.5-flash-preview-tts"
         )
 
+        // Free-tier TTS quota is tiny (~10 requests/model/day). When it is gone,
+        // stop hammering the API and let SpeechTtsEngine use the system voice.
+        val blockedForMs = remainingQuotaBlockMs()
+        if (blockedForMs > 0) {
+            Log.d(TAG, "Gemini TTS skipped: quota cooldown ${blockedForMs / 60000} min remaining")
+            return@withContext false
+        }
+
         // Up to 2 passes in case of transient network hiccup
+        var quotaExhausted = false
         for (attempt in 1..2) {
             for (modelName in modelsToTry) {
                 try {
@@ -181,16 +187,50 @@ class NeuralTtsClient(
                             return@withContext true
                         }
                     }
+                } catch (quota: GeminiTtsQuotaExceeded) {
+                    Log.w(TAG, "Gemini TTS quota exhausted; switching to system voice")
+                    quotaExhausted = true
+                    break
                 } catch (e: Exception) {
                     Log.d(TAG, "Gemini TTS ($modelName, attempt $attempt) error: ${e.message}")
                 }
             }
+            if (quotaExhausted) break
             if (attempt == 1) {
                 delay(350L)
             }
         }
 
         return@withContext false
+    }
+
+    private class GeminiTtsQuotaExceeded : Exception()
+
+    private fun remainingQuotaBlockMs(): Long {
+        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val until = prefs.getLong("gemini_tts_blocked_until", 0L)
+        return (until - System.currentTimeMillis()).coerceAtLeast(0L)
+    }
+
+    private fun blockQuotaFor(ms: Long) {
+        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putLong("gemini_tts_blocked_until", System.currentTimeMillis() + ms)
+            .apply()
+    }
+
+    /**
+     * Reads the "Please retry in 18h30m18.1s" hint from a Gemini 429 body and
+     * returns the cooldown to apply. Falls back to one hour when unparseable.
+     */
+    private fun parseQuotaCooldownMs(errorMessage: String): Long {
+        val match = Regex("retry in (?:([0-9]+)h)?(?:([0-9]+)m)?", RegexOption.IGNORE_CASE).find(errorMessage)
+        val hours = match?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+        val minutes = match?.groupValues?.getOrNull(2)?.toLongOrNull() ?: 0L
+        val parsed = (hours * 60 + minutes) * 60_000L
+        val cooldown = if (parsed > 0L) parsed else 60 * 60_000L
+        // Never block longer than a day; the free-tier quota resets daily anyway.
+        return cooldown.coerceIn(5 * 60_000L, 24 * 60 * 60_000L)
     }
 
     private fun requestGeminiAudio(
@@ -250,7 +290,32 @@ class NeuralTtsClient(
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
+                val errorBody = try {
+                    response.body?.string().orEmpty()
+                } catch (_: Exception) {
+                    ""
+                }
                 Log.d(TAG, "Gemini TTS ($modelName) HTTP ${response.code}")
+
+                if (response.code == 429) {
+                    val message = try {
+                        JSONObject(errorBody).optJSONObject("error")?.optString("message").orEmpty()
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    val cooldown = parseQuotaCooldownMs(message)
+                    blockQuotaFor(cooldown)
+                    Log.w(
+                        TAG,
+                        "Gemini TTS quota exhausted (cooldown ${cooldown / 60_000} min): " +
+                            message.take(160)
+                    )
+                    throw GeminiTtsQuotaExceeded()
+                }
+
+                if (response.code == 404) {
+                    Log.d(TAG, "Gemini TTS model $modelName not available (removed/renamed)")
+                }
                 return null
             }
 

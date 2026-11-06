@@ -554,11 +554,13 @@ class GeminiChatService(private val context: Context? = null) {
 
             // Local safety net: the model sometimes transcribes the wake word correctly
             // but still reports wakeDetected=false. Trust the transcript in that case.
-            if (isStandbyWakeMode && !wakeDetected && looksLikeWakeWord(transcript)) {
+            if (isStandbyWakeMode && !wakeDetected && looksLikeWakeWord(transcript, character.name)) {
                 Log.i(TAG, "Wake word matched locally from transcript: " + transcript)
                 wakeDetected = true
                 isWakeOnly = true
-            } else if (isStandbyWakeMode && wakeDetected && transcript.isNotBlank() && !looksLikeWakeWord(transcript)) {
+            } else if (isStandbyWakeMode && wakeDetected && transcript.isNotBlank() &&
+                !looksLikeWakeWord(transcript, character.name)
+            ) {
                 Log.w(TAG, "Standby wake rejected: no wake word in transcript: " + transcript)
                 wakeDetected = false
                 isWakeOnly = false
@@ -597,10 +599,19 @@ class GeminiChatService(private val context: Context? = null) {
         }
     }
 
-    private fun looksLikeWakeWord(transcript: String): Boolean {
+    private fun looksLikeWakeWord(transcript: String, characterName: String = ""): Boolean {
         val t = transcript.lowercase()
         val variants = listOf("petto", "peto", "pito", "pitto", "petoh", "pe to", "betto", "paitto", "pett")
-        return variants.any { t.contains(it) }
+        if (variants.any { t.contains(it) }) return true
+
+        // The pet's own name is a valid wake word too ("Zayn!", "Halo Zayn").
+        // Without this the standby guard rejects perfectly good wake calls.
+        val name = characterName.lowercase().trim()
+        if (name.length >= 3) {
+            val nameVariants = listOf(name, name.replace('y', 'i'), name.replace("ay", "ai"))
+            if (nameVariants.any { t.contains(it) }) return true
+        }
+        return false
     }
 
     private fun callGeminiAudioJson(
