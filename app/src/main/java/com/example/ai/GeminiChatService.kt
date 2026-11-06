@@ -474,7 +474,7 @@ class GeminiChatService(private val context: Context? = null) {
                     found
                 }
                 if (!jsonResp.isNullOrBlank()) {
-                    parseVoiceAudioJson(jsonResp, character)?.let {
+                    parseVoiceAudioJson(jsonResp, character, isStandbyWakeMode)?.let {
                         lastAiCallSucceeded = true
                         return@withContext it
                     }
@@ -502,7 +502,7 @@ class GeminiChatService(private val context: Context? = null) {
                 }
             }
             if (!fbResp.isNullOrBlank()) {
-                parseVoiceAudioJson(fbResp, character)?.let {
+                parseVoiceAudioJson(fbResp, character, isStandbyWakeMode)?.let {
                     lastAiCallSucceeded = true
                     return@withContext it
                 }
@@ -543,13 +543,21 @@ class GeminiChatService(private val context: Context? = null) {
         }
     }
 
-    private fun parseVoiceAudioJson(rawJson: String, character: PetCharacter): VoiceAudioAnalysisResult? {
+    private fun parseVoiceAudioJson(rawJson: String, character: PetCharacter, isStandbyWakeMode: Boolean = false): VoiceAudioAnalysisResult? {
         return try {
             val clean = rawJson.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
             val obj = JSONObject(clean)
-            val wakeDetected = obj.optBoolean("wakeDetected", false)
-            val isWakeOnly = obj.optBoolean("isWakeOnly", false)
+            var wakeDetected = obj.optBoolean("wakeDetected", false)
+            var isWakeOnly = obj.optBoolean("isWakeOnly", false)
             val transcript = obj.optString("transcript", "").trim()
+
+            // Local safety net: the model sometimes transcribes the wake word correctly
+            // but still reports wakeDetected=false. Trust the transcript in that case.
+            if (isStandbyWakeMode && !wakeDetected && looksLikeWakeWord(transcript)) {
+                Log.i(TAG, "Wake word matched locally from transcript: " + transcript)
+                wakeDetected = true
+                isWakeOnly = true
+            }
             var replyText = obj.optString("replyText", "").trim()
 
             if (transcript.isNotBlank()) {
@@ -582,6 +590,12 @@ class GeminiChatService(private val context: Context? = null) {
             Log.d(TAG, "Failed to parse voice audio JSON: ${e.message}")
             null
         }
+    }
+
+    private fun looksLikeWakeWord(transcript: String): Boolean {
+        val t = transcript.lowercase()
+        val variants = listOf("petto", "peto", "pito", "pitto", "petoh", "pe to", "betto", "paitto", "pett")
+        return variants.any { t.contains(it) }
     }
 
     private fun callGeminiAudioJson(
