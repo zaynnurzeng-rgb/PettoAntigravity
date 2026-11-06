@@ -409,6 +409,7 @@ class GeminiChatService(private val context: Context? = null) {
                 
                 TUGAS DETEKSI KATA PANGGILAN SUARA ("PETTO") & GEMINI LIVE:
                 Dengarkan rekaman audio mikrofon pengguna ini dengan saksama.
+                Rekaman ini bisa sangat pendek (0,3-2 detik) dan hanya berisi kata panggilan. Jika terdengar bunyi yang mirip "petto"/"peto"/"pito", anggap wakeDetected=true walaupun transkripsi tidak sempurna. JANGAN mengarang kata atau umpatan yang tidak terdengar.
                 Periksa apakah pengguna memanggil kata panggilan "Petto" (atau variasi fonetik seperti "Hey Petto", "Halo Petto", "Hai Petto", "Peto", "Pito", atau nama karakter "${character.name}").
                 
                 Aturan:
@@ -464,7 +465,7 @@ class GeminiChatService(private val context: Context? = null) {
                     var found = ""
                     for (m in audioModels) {
                         val started = System.currentTimeMillis()
-                        val r = callGeminiAudioJson(m, apiKey, prompt, wavBytes)
+                        val r = callGeminiAudioJson(m, apiKey, prompt, wavBytes, if (isStandbyWakeMode) 0.1 else 0.4)
                         Log.d(TAG, "Audio model " + m + " -> " + (if (r.isBlank()) "empty" else "ok") + " in " + (System.currentTimeMillis() - started) + "ms")
                         if (r.isNotBlank()) {
                             found = r
@@ -557,6 +558,10 @@ class GeminiChatService(private val context: Context? = null) {
                 Log.i(TAG, "Wake word matched locally from transcript: " + transcript)
                 wakeDetected = true
                 isWakeOnly = true
+            } else if (isStandbyWakeMode && wakeDetected && transcript.isNotBlank() && !looksLikeWakeWord(transcript)) {
+                Log.w(TAG, "Standby wake rejected: no wake word in transcript: " + transcript)
+                wakeDetected = false
+                isWakeOnly = false
             }
             var replyText = obj.optString("replyText", "").trim()
 
@@ -602,7 +607,8 @@ class GeminiChatService(private val context: Context? = null) {
         modelName: String,
         apiKey: String,
         prompt: String,
-        wavBytes: ByteArray
+        wavBytes: ByteArray,
+        temperature: Double
     ): String {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
         val base64Audio = Base64.encodeToString(wavBytes, Base64.NO_WRAP)
@@ -624,7 +630,7 @@ class GeminiChatService(private val context: Context? = null) {
             })
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
-                put("temperature", 0.4)
+                put("temperature", temperature)
                 put("maxOutputTokens", 450)
             })
         }
