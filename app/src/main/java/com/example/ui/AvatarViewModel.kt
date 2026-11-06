@@ -189,6 +189,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     private var rapidSpeechErrorCount: Int = 0
     private var isSpeakingWakeAck: Boolean = false
     private var isSpeakingVoiceReply: Boolean = false
+    private var ttsWatchdogJob: Job? = null
+    private var lastVoiceUnavailableNoticeMs: Long = 0L
 
     private val micWakeDetector = ContinuousMicWakeDetector(
         context = application,
@@ -290,6 +292,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             currentEmotion = if (isSpeaking) AvatarEmotion.TALKING else AvatarEmotion.IDLE
         )
         if (!isSpeaking) {
+            ttsWatchdogJob?.cancel()
+            Log.d("AvatarViewModel", "TTS done: faceToFace=" + _uiState.value.isFaceToFaceActive + " wakeAck=" + isSpeakingWakeAck + " voiceReply=" + isSpeakingVoiceReply)
             if (_uiState.value.isFaceToFaceActive && !_uiState.value.isFaceToFaceMuted) {
                 onAvatarFinishedSpeakingInCall()
             } else if (isSpeakingWakeAck) {
@@ -494,6 +498,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         val currentSession = _uiState.value.voiceSessionState
         val isStandby = currentSession == VoiceSessionState.STANDBY_WAKE
+        Log.i("AvatarViewModel", "Mic segment captured: " + durationMs + "ms (" + wavBytes.size + " bytes), session=" + currentSession)
 
         audioAnalysisJob?.cancel()
         audioAnalysisJob = viewModelScope.launch {
@@ -516,6 +521,20 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     language = state.selectedLanguage,
                     history = state.messages
                 )
+                Log.i("AvatarViewModel", "Voice result: wake=" + result.wakeDetected + ", wakeOnly=" + result.isWakeOnly + ", offline=" + result.isOfflineFallback + ", transcript=" + result.transcript + ", replyLen=" + result.replyText.length)
+
+                if (result.isOfflineFallback) {
+                    notifyVoiceUnavailable()
+                    _uiState.value = _uiState.value.copy(isLoadingAi = false)
+                    if (isStandby) {
+                        micWakeDetector.setLiveSessionMode(false)
+                    } else {
+                        _uiState.value = _uiState.value.copy(voiceSessionState = VoiceSessionState.GEMINI_LIVE_LISTENING)
+                        micWakeDetector.setLiveSessionMode(true)
+                    }
+                    micWakeDetector.setPaused(false)
+                    return@launch
+                }
 
                 if (isStandby) {
                     if (result.wakeDetected) {
@@ -780,6 +799,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
      * and transitions directly into active listening for the user's spoken question.
      */
     fun callHeyPetto() {
+        Log.i("AvatarViewModel", "callHeyPetto triggered (session=" + _uiState.value.voiceSessionState + ")")
         wakeListenJob?.cancel()
         audioAnalysisJob?.cancel()
         micWakeDetector.setPaused(true)
@@ -911,6 +931,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             rate = _uiState.value.speechRate,
             character = _uiState.value.activeCharacter
         )
+        armTtsWatchdog(text)
 
         emotionResetJob?.cancel()
         emotionResetJob = viewModelScope.launch {
@@ -919,6 +940,45 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.value = _uiState.value.copy(currentEmotion = AvatarEmotion.IDLE)
             }
         }
+    }
+
+    /**
+     * Safety net: if the neural TTS engine never reports "finished" (network drop, audio focus loss),
+     * isSpeakingWakeAck / isSpeakingVoiceReply / isTalking would stay true forever and the mic would never resume.
+     */
+    private fun armTtsWatchdog(text: String) {
+        ttsWatchdogJob?.cancel()
+        val timeoutMs = (text.length * 120L + 8_000L).coerceIn(12_000L, 45_000L)
+        ttsWatchdogJob = viewModelScope.launch {
+            delay(timeoutMs)
+            if (isSpeakingWakeAck || isSpeakingVoiceReply || _uiState.value.isTalking) {
+                Log.w("AvatarViewModel", "TTS watchdog fired after " + timeoutMs + "ms -> forcing mic resume")
+                isSpeakingWakeAck = false
+                isSpeakingVoiceReply = false
+                _uiState.value = _uiState.value.copy(isTalking = false)
+                if (!_uiState.value.isFaceToFaceActive) {
+                    if (_uiState.value.voiceSessionState == VoiceSessionState.STANDBY_WAKE) {
+                        resumeContinuousWakeStandby(delayMs = 200L)
+                    } else {
+                        enterGeminiLiveListeningAfterSpeech(delayMs = 200L)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun notifyVoiceUnavailable() {
+        val now = System.currentTimeMillis()
+        if (now - lastVoiceUnavailableNoticeMs < 30_000L) return
+        lastVoiceUnavailableNoticeMs = now
+        val char = _uiState.value.activeCharacter
+        val notice = ChatMessage(
+            senderName = char.name,
+            text = "(Suara belum bisa kupahami: koneksi Gemini API gagal. Cek API key atau internet, ya.)",
+            isUser = false,
+            emotion = AvatarEmotion.SURPRISED
+        )
+        _uiState.value = _uiState.value.copy(messages = _uiState.value.messages + notice)
     }
 
     fun updateSpeechAndAutoSpeak(text: String, emotion: AvatarEmotion = AvatarEmotion.TALKING) {
