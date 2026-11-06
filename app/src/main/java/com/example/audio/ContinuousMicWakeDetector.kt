@@ -48,7 +48,7 @@ class ContinuousMicWakeDetector(
         private const val SAMPLE_RATE = 16000
         private const val FRAME_DURATION_MS = 100 // 100ms per frame = 1600 samples
         private const val SAMPLES_PER_FRAME = (SAMPLE_RATE * FRAME_DURATION_MS) / 1000
-        private const val PRE_ROLL_FRAMES = 4 // 400ms pre-roll buffer
+        private const val PRE_ROLL_FRAMES = 8 // 800ms pre-roll buffer so the start of a short wake word is not cut
         private const val MIN_SPEECH_MS = 300L
         private const val MAX_SPEECH_MS = 6500L
         private const val END_SILENCE_MS = 650L
@@ -197,7 +197,7 @@ class ContinuousMicWakeDetector(
                     }
 
                     // Dynamic VAD threshold above ambient noise floor
-                    val voiceThreshold = max(520.0, adaptiveNoiseFloorRms * 2.35)
+                    val voiceThreshold = max(420.0, adaptiveNoiseFloorRms * 2.2)
                     val isVoiceFrame = rmsAmplitude >= voiceThreshold
 
                     if (now - lastVadLogMs >= 3000L) {
