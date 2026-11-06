@@ -8,6 +8,7 @@ import com.example.BuildConfig
 import com.example.model.AppLanguage
 import com.example.model.AvatarEmotion
 import com.example.model.ChatMessage
+import com.example.model.GeminiModelTier
 import com.example.model.PetCharacter
 import com.example.model.PetMemoryManager
 import com.example.model.QuizQuestion
@@ -38,7 +39,8 @@ import kotlin.math.sqrt
 data class GeminiReply(
     val text: String,
     val emotion: AvatarEmotion = AvatarEmotion.TALKING,
-    val isFromAi: Boolean = false
+    val isFromAi: Boolean = false,
+    val modelUsed: String = "gemini-3.8-flash"
 )
 
 data class VoiceAudioAnalysisResult(
@@ -53,9 +55,20 @@ class GeminiChatService(private val context: Context? = null) {
 
     private val TAG = "GeminiChatService"
 
-    // Lazy initialization of Firebase AI Logic models (free-tier gemini-3.8-flash & gemini-3.5-flash-lite first)
+    // Lazy initialization of Firebase AI Logic models across the 3 tiers:
+    // - gemini-4-argon for complex reasoning tasks
+    // - gemini-3.8-flash for general multi-turn tasks
+    // - gemini-3.1-flash-lite (& gemini-3.5-flash-lite) for fast low-latency tasks
+    private val argonModel by lazy {
+        Firebase.ai.generativeModel("gemini-4-argon")
+    }
+
     private val flashModel by lazy {
         Firebase.ai.generativeModel("gemini-3.8-flash")
+    }
+
+    private val flashLite31Model by lazy {
+        Firebase.ai.generativeModel("gemini-3.1-flash-lite")
     }
 
     private val flashLiteModel by lazy {
@@ -141,10 +154,47 @@ class GeminiChatService(private val context: Context? = null) {
     }
 
     /**
-     * Main conversation generator:
+     * Automatically selects the optimal Gemini model tier based on prompt complexity
+     * when `preferredTier == GeminiModelTier.AUTO`, or respects the user's manual tier selection:
+     * - Complex tasks -> gemini-4-argon
+     * - General tasks -> gemini-3.8-flash
+     * - Fast tasks -> gemini-3.1-flash-lite
+     */
+    fun resolveModelTier(
+        userMessage: String,
+        preferredTier: GeminiModelTier = GeminiModelTier.AUTO
+    ): GeminiModelTier {
+        if (preferredTier != GeminiModelTier.AUTO) return preferredTier
+
+        val clean = userMessage.trim()
+        val lower = clean.lowercase()
+        val wordCount = clean.split(Regex("\\s+")).filter { it.isNotBlank() }.size
+
+        val complexKeywords = listOf(
+            "jelaskan", "analisis", "mengapa", "kenapa", "perbedaan", "bandingkan",
+            "rumus", "teori", "strategi", "langkah", "kode", "program", "algoritma",
+            "filsafat", "sejarah", "hitung", "buktikan", "explain", "analyze", "why", "how does"
+        )
+        if (wordCount >= 16 || complexKeywords.any { lower.contains(it) }) {
+            return GeminiModelTier.ARGON_COMPLEX
+        }
+
+        if (wordCount <= 4 && !clean.contains("?")) {
+            return GeminiModelTier.FLASH_LITE_FAST
+        }
+
+        return GeminiModelTier.FLASH_GENERAL
+    }
+
+    fun buildLiveSystemInstruction(character: PetCharacter, language: AppLanguage): String {
+        return buildSystemInstruction(character, language)
+    }
+
+    /**
+     * Main multi-turn conversation generator:
      * 1. Wake words check for instant reaction (0ms).
-     * 2. Live Gemini REST API (gemini-3.8-flash / gemini-3.1-flash-lite) with full conversational context.
-     * 3. Firebase AI Logic pass (gemini-3.8-flash / gemini-3.5-flash-lite) as second-tier AI.
+     * 2. Smart model tier routing (gemini-4-argon for complex, gemini-3.8-flash for general, gemini-3.1-flash-lite for fast).
+     * 3. Full multi-turn conversation history + character role system instruction.
      * 4. Smart conversational fallback if offline/timeout.
      */
     suspend fun generateReply(
@@ -152,7 +202,8 @@ class GeminiChatService(private val context: Context? = null) {
         character: PetCharacter,
         language: AppLanguage,
         history: List<ChatMessage>,
-        cameraBitmap: Bitmap? = null
+        cameraBitmap: Bitmap? = null,
+        preferredTier: GeminiModelTier = GeminiModelTier.AUTO
     ): GeminiReply = withContext(Dispatchers.IO) {
         val cleanMsg = userMessage.trim()
         val lower = cleanMsg.lowercase()
@@ -160,33 +211,46 @@ class GeminiChatService(private val context: Context? = null) {
         // Automatically extract and persist any personal facts from the user's message
         memoryManager?.extractAndSaveFromUtterance(cleanMsg)
 
+        val activeTier = resolveModelTier(cleanMsg, preferredTier)
+        val targetModelId = activeTier.modelId
+
         // 1. Instant check: Wake words (0ms response time!)
         if (cameraBitmap == null && (lower.contains("hey petto") || lower.contains("halo petto") || lower.contains("hai petto"))) {
             return@withContext GeminiReply(
                 text = ReactionCatalog.getWakeWordResponse(character, language),
                 emotion = AvatarEmotion.SURPRISED,
-                isFromAi = false
+                isFromAi = false,
+                modelUsed = "gemini-3.1-flash-lite"
             )
         }
 
         // 2. If user has a real Gemini API Key (via Secrets or in-app input), try Direct Gemini REST API first
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
+            val restModelsOrder = when (activeTier) {
+                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-4-argon", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.8-flash")
+                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.5-flash")
+                else -> listOf("gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash")
+            }
             try {
-                val restReply = withTimeoutOrNull(20000L) {
-                    val r25 = callGeminiApi("gemini-2.5-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
-                    if (r25.isNotBlank()) r25
-                    else {
-                        val r20 = callGeminiApi("gemini-2.0-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
-                        if (r20.isNotBlank()) r20 else callGeminiApi("gemini-3.8-flash", apiKey, cleanMsg, character, language, history, cameraBitmap)
+                val restResult = withTimeoutOrNull(20000L) {
+                    var replyText = ""
+                    for (m in restModelsOrder) {
+                        val candidate = callGeminiApi(m, apiKey, cleanMsg, character, language, history, cameraBitmap)
+                        if (candidate.isNotBlank()) {
+                            replyText = candidate
+                            break
+                        }
                     }
+                    replyText
                 }
-                if (!restReply.isNullOrBlank()) {
+                if (!restResult.isNullOrBlank()) {
                     lastAiCallSucceeded = true
                     return@withContext GeminiReply(
-                        text = restReply,
-                        emotion = inferEmotionFromText(restReply, character),
-                        isFromAi = true
+                        text = restResult,
+                        emotion = inferEmotionFromText(restResult, character),
+                        isFromAi = true,
+                        modelUsed = targetModelId
                     )
                 }
             } catch (e: CancellationException) {
@@ -196,17 +260,18 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 3. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) immediately when no custom REST key or as fallback
+        // 3. Try Firebase AI Logic with the selected model tier (gemini-4-argon / gemini-3.8-flash / gemini-3.1-flash-lite)
         try {
             val firebaseReply = withTimeoutOrNull(20000L) {
-                callFirebaseAi(cleanMsg, character, language, cameraBitmap)
+                callFirebaseAi(cleanMsg, character, language, history, cameraBitmap, activeTier)
             }
-            if (!firebaseReply.isNullOrBlank()) {
+            if (firebaseReply != null && firebaseReply.first.isNotBlank()) {
                 lastAiCallSucceeded = true
                 return@withContext GeminiReply(
-                    text = firebaseReply,
-                    emotion = inferEmotionFromText(firebaseReply, character),
-                    isFromAi = true
+                    text = firebaseReply.first,
+                    emotion = inferEmotionFromText(firebaseReply.first, character),
+                    isFromAi = true,
+                    modelUsed = firebaseReply.second
                 )
             }
         } catch (e: CancellationException) {
@@ -227,7 +292,8 @@ class GeminiChatService(private val context: Context? = null) {
             return@withContext GeminiReply(
                 text = visionFallback,
                 emotion = AvatarEmotion.HAPPY,
-                isFromAi = false
+                isFromAi = false,
+                modelUsed = targetModelId
             )
         }
 
@@ -237,62 +303,75 @@ class GeminiChatService(private val context: Context? = null) {
             return@withContext GeminiReply(
                 text = directAnswer,
                 emotion = emotion,
-                isFromAi = false
+                isFromAi = false,
+                modelUsed = targetModelId
             )
         }
 
         // 5. Contextual Persona Fallback
-        return@withContext getFastFallbackReply(cleanMsg, character, language)
+        return@withContext getFastFallbackReply(cleanMsg, character, language).copy(modelUsed = targetModelId)
     }
 
     private suspend fun callFirebaseAi(
         userMessage: String,
         character: PetCharacter,
         language: AppLanguage,
-        cameraBitmap: Bitmap? = null
-    ): String? = withContext(Dispatchers.IO) {
+        history: List<ChatMessage>,
+        cameraBitmap: Bitmap? = null,
+        activeTier: GeminiModelTier = GeminiModelTier.FLASH_GENERAL
+    ): Pair<String, String>? = withContext(Dispatchers.IO) {
         val systemPrompt = buildSystemInstruction(character, language)
         val visionNote = if (cameraBitmap != null) {
             "\n[KONTEKS VISUAL KAMERA LANGSUNG: Perhatikan gambar kamera pengguna yang dilampirkan. Komentari ekspresi wajah pengguna, benda yang dipegang, pakaian, atau suasana di kamera secara alami sesuai kepribadianmu dan jawab ucapannya.]\n"
         } else ""
-        val prompt = "$systemPrompt$visionNote\n\nPengguna: $userMessage\n${character.name}:"
 
-        try {
-            val response = if (cameraBitmap != null) {
-                flashModel.generateContent(
-                    content {
-                        image(cameraBitmap)
-                        text(prompt)
-                    }
-                )
-            } else {
-                flashModel.generateContent(prompt)
-            }
-            val text = response.text?.replace(Regex("^\"|\"$"), "")?.trim()
-            if (!text.isNullOrBlank()) return@withContext text
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.d(TAG, "flashModel (gemini-3.8-flash) pass failed: ${e.message}")
+        // Include multi-turn conversation history so the chatbot maintains full thread context
+        val historyTranscript = if (history.isNotEmpty()) {
+            "\nRIWAYAT PERCAKAPAN SEBELUMNYA:\n" +
+                history.takeLast(12).joinToString("\n") { msg ->
+                    "${if (msg.isUser) "Pengguna" else character.name}: ${msg.text}"
+                } + "\n"
+        } else ""
+
+        val prompt = "$systemPrompt$visionNote$historyTranscript\nPengguna: $userMessage\n${character.name}:"
+
+        // Order models according to the active tier (with free-tier fallback safety)
+        val modelChain = when (activeTier) {
+            GeminiModelTier.ARGON_COMPLEX -> listOf(
+                argonModel to "gemini-4-argon",
+                flashModel to "gemini-4-argon"
+            )
+            GeminiModelTier.FLASH_LITE_FAST -> listOf(
+                flashLite31Model to "gemini-3.1-flash-lite",
+                flashLiteModel to "gemini-3.1-flash-lite",
+                flashModel to "gemini-3.1-flash-lite"
+            )
+            else -> listOf(
+                flashModel to "gemini-3.8-flash",
+                flashLite31Model to "gemini-3.8-flash",
+                flashLiteModel to "gemini-3.8-flash"
+            )
         }
 
-        try {
-            val responseLite = if (cameraBitmap != null) {
-                flashLiteModel.generateContent(
-                    content {
-                        image(cameraBitmap)
-                        text(prompt)
-                    }
-                )
-            } else {
-                flashLiteModel.generateContent(prompt)
+        for ((modelInstance, badgeLabel) in modelChain) {
+            try {
+                val response = if (cameraBitmap != null) {
+                    modelInstance.generateContent(
+                        content {
+                            image(cameraBitmap)
+                            text(prompt)
+                        }
+                    )
+                } else {
+                    modelInstance.generateContent(prompt)
+                }
+                val text = response.text?.replace(Regex("^\"|\"$"), "")?.trim()
+                if (!text.isNullOrBlank()) return@withContext text to badgeLabel
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.d(TAG, "Firebase AI model pass ($badgeLabel) skipped: ${e.message}")
             }
-            val textLite = responseLite.text?.replace(Regex("^\"|\"$"), "")?.trim()
-            if (!textLite.isNullOrBlank()) return@withContext textLite
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.d(TAG, "flashLiteModel (gemini-3.5-flash-lite) pass failed: ${e.message}")
         }
 
         null

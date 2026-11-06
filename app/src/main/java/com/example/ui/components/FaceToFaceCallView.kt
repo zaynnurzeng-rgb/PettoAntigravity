@@ -268,9 +268,10 @@ fun FaceToFaceCallView(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "✨ Gemini AI",
+                            text = "🎙️ ${uiState.activeLiveModelName.ifBlank { "gemini-3.8-live" }}",
                             style = MaterialTheme.typography.labelSmall.copy(
-                                color = Color(0xFFE1BEE7),
+                                color = Color(0xFF6EE7B7),
+                                fontWeight = FontWeight.Bold,
                                 fontSize = 10.sp
                             )
                         )

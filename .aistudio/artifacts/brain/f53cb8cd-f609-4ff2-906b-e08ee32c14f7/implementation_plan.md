@@ -1,48 +1,49 @@
-# Rencana Implementasi: Modul Dongeng Petualangan Interaktif Bersama Petto 3D
+# Rencana Implementasi: Upgrade Penuh `gemini-3.8-live` Voice Conversations & Multi-Turn Gemini Chatbot
 
-## 1. Gambaran Umum Pengalaman Pengguna (UX)
-Kami akan membangun **Modul Dongeng Petualangan Interaktif** berlayar penuh (*Full-Screen 3D Story Stage*) di mana **Petto 3D tampil langsung di atas panggung cerita** dan bereaksi secara ekspresif (*Takjub, Bersemangat, Penasaran, Berpikir, Senang*) sambil membacakan kisah petualangan yang dibuat oleh **Gemini AI** sesuai keputusan Anda.
+## 1. Real-Time Voice Conversations dengan `gemini-3.8-live` (Live API)
 
----
+### A. Klien WebSocket Bidirectional Live API (`GeminiLiveSessionClient.kt` - *File Baru*)
+- Mengimplementasikan koneksi *real-time* WebSocket ke endpoint **Gemini Live API (`BidiGenerateContent`)** menggunakan model utama **`gemini-3.8-live`** (dengan fallback otomatis ke `gemini-2.0-flash-live-001` / `gemini-2.0-flash-exp` jika dibutuhkan):
+  - **Setup Pesan Awal (`setup`)**: Mengirimkan `model: "models/gemini-3.8-live"`, `generationConfig` dengan `responseModalities: ["AUDIO"]`, konfigurasi suara karakter (`Puck` untuk Zayn, `Aoede` untuk Siti, `Fenrir` untuk Rizky, `Charon` untuk Jamal, `Orus` untuk Heru), serta `systemInstruction` lengkap beserta memori jangka panjang pengguna.
+  - **Streaming Audio Masuk (`realtimeInput`)**: Mengirimkan potongan PCM 16kHz 16-bit mono (`audio/pcm;rate=16000`) secara *real-time* dari mikrofon pengguna saat sesi Live / Video Call berlangsung, plus dukungan pengiriman *frame* kamera (`image/jpeg`) saat *Video Call*.
+  - **Streaming Audio Keluar (`serverContent`)**: Menerima *chunk* audio PCM 24kHz (`audio/pcm;rate=24000`) dan transkrip teks secara *streaming* dari `gemini-3.8-live`, lalu memutarnya tanpa jeda menggunakan `AudioTrack` berlatensi rendah sambil menggerakkan animasi mulut (*lip-sync*) Petto 3D secara langsung.
+  - **Dukungan Interupsi (*Barge-In*)**: Jika pengguna mulai berbicara saat Petto sedang menjawab, `AudioTrack` langsung dihentikan seketika agar percakapan terasa alami seperti telepon sungguhan.
 
-## 2. Fitur Utama yang Akan Dibangun
-
-### A. Layar Penuh Panggung Cerita 3D (`InteractiveStoryStageView.kt`)
-- **Panggung Visual Bertema**: Latar belakang atmosferik yang berubah mengikuti tema cerita (*Hutan Kristal Ajaib*, *Misi Luar Angkasa*, *Misteri Kota Tua*, *Kerajaan Bawah Laut*, atau *Kastil Langit Naga*).
-- **Petto 3D Live Narrator**: Karakter 3D tampil di bagian atas panggung dengan animasi bicara (*lip-sync*), ekspresi emosi dinamis sesuai suasana adegan (`sceneEmotion`), dan gerakan tubuh otomatis.
-- **Kontrol Narasi Suara**: Tombol **Putar Ulang Suara Narasi**, indikator kalimat yang sedang dibacakan Petto, serta tombol kembali yang otomatis menyimpan progres cerita.
-
-### B. Pilihan Cabang A/B + Aksi Bebas (Ketik atau Suara)
-- **2 Tombol Pilihan Cepat (Pilihan A & Pilihan B)**: Dihasilkan secara kontekstual oleh Gemini AI pada setiap bab.
-- **Input Aksi Bebas (Suara & Ketik Sendiri)**:
-  - Pemain dapat mengetik aksi kreatif sendiri (contoh: *"Ajak naga itu makan ikan bakar"* atau *"Gunakan kunci kristal untuk membuka pintu rahasia"*) atau menekan tombol **🎙️ Bicara Aksi** untuk mendiktekan keputusan secara langsung.
-  - Pemain juga bisa mengeklik item di **Tas Inventaris Ajaib** untuk menggunakan item tersebut di dalam cerita.
-
-### C. Sistem Bab, Klimaks & Multi-Ending (`StoryChapter` & `StoryEndingType`)
-- **Progres Bab (Bab 1 hingga Bab 5 - Klimaks/Ending)**:
-  - Dilengkapi bilah progres bab (*Bab 1: Awal Petualangan* → *Bab 2-4: Konflik & Penjelajahan* → *Bab 5: Klimaks & Ending*).
-  - Pemain juga dapat memilih untuk **Lanjut Bab Baru (Endless Mode)** setelah mencapai Ending jika masih ingin melanjutkan petualangan.
-- **Tipe Ending Dinamis**: Gemini AI menentukan hasil akhir cerita berdasarkan keputusan pemain (*Ending Heroik / Legendaris*, *Ending Rahasia / Penemuan Langka*, atau *Ending Lucu / Tak Terduga*) lengkap dengan lencana pencapaian.
-
-### D. Tas Inventaris Item Ajaib (`StoryItem`)
-- Setiap bab dapat menghadiahkan **Item Ajaib / Petunjuk** baru yang ditemukan di dalam cerita (lengkap dengan ikon emoji, nama item, dan deskripsi singkat, misalnya `🗝️ Kunci Bintang Kuno` atau `🧪 Ramuan Cahaya Laut`).
-- Baris **Inventaris Ajaib** ditampilkan di panggung cerita; pemain dapat mengetuk item untuk langsung menggunakannya pada giliran aksi berikutnya.
-
-### E. Penyimpanan & Riwayat Petualangan (`StoryAdventureRepository.kt`)
-- **Auto-Save & Resume**: Setiap bab otomatis tersimpan di penyimpanan lokal (`SharedPreferences` JSON).
-- **Daftar Riwayat Petualangan**: Pemain dapat melanjutkan cerita yang belum tamat kapan saja, melihat daftar item yang sudah dikumpulkan, atau memulai petualangan baru.
+### B. Integrasi di Ruangan 3D & Video Call (`AvatarViewModel.kt` & `FaceToFaceCallView.kt`)
+- Menambahkan indikator status koneksi **`⚡ Gemini 3.8 Live API Aktif`** pada *Gemini Live Pill* di ruangan utama dan di layar **Video Call**.
+- Jika pengguna belum memasukkan kunci API untuk WebSocket langsung, sistem otomatis beralih mulus ke jalur `Firebase.ai` tanpa memutus percakapan.
 
 ---
 
-## 3. Arsitektur & File yang Akan Dibuat / Diperbarui
+## 2. Multi-Turn Gemini Chatbot dengan 3 Tingkatan Model (`gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.1-flash-lite`)
 
-1. **`app/src/main/java/com/example/model/FunActivityModels.kt`**:
-   - Menambahkan model data `StoryItem`, `StoryEndingType`, dan `SavedStorySession`, serta memperkaya `StoryNode` dengan `chapterNumber`, `maxChapters`, `sceneEmotion`, `acquiredItem: StoryItem?`, `isEnding: Boolean`, `endingTitle: String?`, dan `endingType: StoryEndingType?`.
-2. **`app/src/main/java/com/example/data/StoryAdventureRepository.kt`** *(File Baru)*:
-   - Mengelola penyimpanan lokal untuk sesi petualangan aktif dan riwayat cerita tersimpan agar bisa dilanjutkan kapan saja.
+### A. Sistem Pemilihan Model Otomatis + Manual (`GeminiModelTier`)
+Menambahkan enum `GeminiModelTier` dengan 4 pilihan yang dapat dipilih pengguna atau diatur ke **Auto (Pintar)**:
+1. **🤖 Auto (Rekomendasi)**: Secara cerdas memilih model berdasarkan kompleksitas pesan:
+   - Pesan singkat / sapaan / obrolan kilat (< 6 kata) → **`gemini-3.1-flash-lite`** (Respons super cepat).
+   - Obrolan sehari-hari, curhat, cerita, & diskusi umum → **`gemini-3.8-flash`** (Seimbang & ekspresif).
+   - Pertanyaan kompleks, analisis mendalam, logika/matematika, koding, atau penjelasan panjang → **`gemini-4-argon`** (Penalaran tingkat tinggi).
+2. **🧠 Kompleks (`gemini-4-argon`)**: Dipilih manual untuk tugas berat & analisis mendalam.
+3. **⚡ Umum (`gemini-3.8-flash`)**: Dipilih manual untuk percakapan multi-turn sehari-hari.
+4. **🚀 Kilat (`gemini-3.1-flash-lite`)**: Dipilih manual untuk respons instan berlatensi rendah.
+
+### B. Antarmuka Multi-Turn Chatbot Interaktif (`ChatHistoryDialog.kt` & `AvatarRoomScreen.kt`)
+- Menyempurnakan jendela obrolan (`ChatHistoryDialog.kt`) menjadi **Multi-Turn Gemini Chatbot Sheet** yang lengkap:
+  - Menampilkan **daftar pesan yang dapat digulir (*scrollable thread*)** dengan auto-scroll ke pesan terbaru.
+  - Menampilkan **lencana model** pada setiap balasan Petto (mis. `⚡ gemini-3.8-flash`, `🧠 gemini-4-argon`, atau `🚀 gemini-3.1-flash-lite`) serta peran karakter aktif (`system_instruction`).
+  - Menyediakan **baris pemilih model (`Auto`, `Argon`, `Flash`, `Flash-Lite`)** di bagian atas ruang obrolan.
+  - Menyediakan **kolom input teks multi-turn, chip saran topik cepat, tombol mikrofon suara, dan tombol kirim** langsung di dalam jendela obrolan (sehingga pengguna bisa mengobrol panjang seperti aplikasi chat modern tanpa harus menutup jendela riwayat).
+
+---
+
+## 3. File yang Akan Dibuat / Diperbarui
+1. **`app/src/main/java/com/example/ai/GeminiLiveSessionClient.kt`** *(File Baru)*:
+   - Klien WebSocket `BidiGenerateContent` untuk `gemini-3.8-live` dengan `AudioRecord` (16kHz PCM in) dan `AudioTrack` (24kHz PCM streaming out).
+2. **`app/src/main/java/com/example/model/PetCharacter.kt`** (atau `ChatMessage`):
+   - Menambahkan enum `GeminiModelTier` (`AUTO`, `ARGON_COMPLEX`, `FLASH_GENERAL`, `FLASH_LITE_FAST`) dan properti `modelUsed: String` pada `ChatMessage`.
 3. **`app/src/main/java/com/example/ai/GeminiChatService.kt`**:
-   - Memperbarui generator narasi cabang Gemini AI (`generateStoryNode`) agar menerima daftar **inventaris pemain**, **nomor bab saat ini**, **aksi bebas/pilihan pemain**, serta menghasilkan output terstruktur berisi judul bab, narasi cerita sesuai kepribadian Petto, emosi adegan, item baru yang ditemukan, status ending, dan Pilihan A/B.
-4. **`app/src/main/java/com/example/ui/components/InteractiveStoryStageView.kt`** *(File Baru)*:
-   - Antarmuka layar penuh **Panggung Dongeng Petualangan 3D** dengan kanvas Petto 3D, lencana Bab & Inventaris Item Ajaib, kartu narasi interaktif, tombol Pilihan A/B, kolom aksi bebas + mikrofon suara, serta kartu perayaan Ending.
-5. **`app/src/main/java/com/example/ui/components/FunActivitiesSheet.kt`**, **`AvatarViewModel.kt`**, & **`AvatarRoomScreen.kt`**:
-   - Menghubungkan tab **Dongeng** di menu **Aktivitas Seru** (dan tombol pintas langsung) untuk membuka **Layar Penuh Panggung Dongeng Petualangan 3D**, serta mengelola siklus hidup suara, emosi 3D, inventaris, dan penyimpanan cerita.
+   - Mengimplementasikan *smart model router* (`resolveModelForPrompt`) dan dukungan penuh untuk `gemini-4-argon`, `gemini-3.8-flash`, dan `gemini-3.1-flash-lite` baik melalui `Firebase.ai` maupun Gemini REST API dengan konteks multi-turn penuh.
+4. **`app/src/main/java/com/example/ui/components/ChatHistoryDialog.kt`**:
+   - Mengubah dialog riwayat pasif menjadi **Multi-Turn Gemini Chatbot** interaktif dengan pemilih model (`Auto` / `gemini-4-argon` / `gemini-3.8-flash` / `gemini-3.1-flash-lite`), *scrollable thread*, indikator *typing*, dan bilah kirim pesan langsung.
+5. **`app/src/main/java/com/example/ui/AvatarViewModel.kt`** & **`AvatarRoomScreen.kt`**:
+   - Menghubungkan `GeminiLiveSessionClient` (`gemini-3.8-live`) ke sesi suara / *Video Call* serta menghubungkan state pemilihan model `GeminiModelTier` ke antarmuka Chatbot.

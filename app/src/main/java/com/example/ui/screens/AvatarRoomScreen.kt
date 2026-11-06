@@ -471,7 +471,14 @@ fun AvatarRoomScreen(
 
         if (showChatHistory) {
             ChatHistoryDialog(
+                character = uiState.activeCharacter,
                 messages = uiState.messages,
+                selectedModelTier = uiState.selectedModelTier,
+                isLoading = uiState.isLoadingAi,
+                onSelectModelTier = { viewModel.setModelTier(it) },
+                onSendMessage = { viewModel.sendMessage(it) },
+                onOpenVoiceInput = { viewModel.openVoiceInput() },
+                onClearHistory = { viewModel.clearHistory() },
                 onSpeakMessage = { viewModel.speakText(it) },
                 onDismiss = { showChatHistory = false }
             )
@@ -1036,12 +1043,12 @@ private fun GeminiLiveVoicePill(
     }
 
     val statusLabel = when {
-        isSpeaking -> "Gemini Live • $characterName berbicara..."
-        isThinking -> "Gemini Live • Memproses suara..."
-        isLiveListening -> "Gemini Live • Mendengarkanmu..."
-        isUserSpeakingNow -> "Mendeteksi suara..."
+        isSpeaking -> "Gemini 3.8 Live • $characterName berbicara..."
+        isThinking -> "Gemini 3.8 Live • Memproses suara..."
+        isLiveListening -> "Gemini 3.8 Live • Mendengarkanmu..."
+        isUserSpeakingNow -> "Gemini 3.8 Live • Mendeteksi suara..."
         idleBehavior != IdlePetBehavior.NONE -> "$characterName ${idleBehavior.displayLabel.lowercase()} ${idleBehavior.particleSymbol}"
-        else -> "Standby • Panggil \"Petto\""
+        else -> "Gemini 3.8 Live • Panggil \"Petto\""
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "liveWave")

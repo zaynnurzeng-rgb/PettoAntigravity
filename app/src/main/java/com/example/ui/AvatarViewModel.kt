@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.GeminiChatService
+import com.example.ai.GeminiLiveSessionClient
 import com.example.audio.ContinuousMicWakeDetector
 import com.example.audio.SpeechRecognitionHelper
 import com.example.audio.SpeechTtsEngine
@@ -12,6 +13,7 @@ import com.example.model.AvatarCustomization
 import com.example.model.AvatarEmotion
 import com.example.model.CharacterCatalog
 import com.example.model.ChatMessage
+import com.example.model.GeminiModelTier
 import com.example.model.PetCharacter
 import com.example.model.PetSpecies
 import com.example.model.ReactionCatalog
@@ -150,7 +152,11 @@ data class AvatarUiState(
     val storyHistoryLog: List<String> = emptyList(),
     val savedStorySessions: List<SavedStorySession> = emptyList(),
     val waterGlassesToday: Int = 0,
-    val stretchCountToday: Int = 0
+    val stretchCountToday: Int = 0,
+    // Gemini Multi-Turn Model Tier & Gemini 3.8 Live Real-Time Session state
+    val selectedModelTier: GeminiModelTier = GeminiModelTier.AUTO,
+    val isGeminiLiveConnected: Boolean = false,
+    val activeLiveModelName: String = "gemini-3.8-live"
 )
 
 data class HomeworkSolution(
@@ -211,6 +217,64 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 isUserSpeakingNow = false,
                 currentEmotion = if (_uiState.value.isTalking) _uiState.value.currentEmotion else AvatarEmotion.IDLE
             )
+        }
+    )
+
+    private val geminiLiveClient = GeminiLiveSessionClient(
+        context = application,
+        onConnectionStateChanged = { connected, modelName ->
+            _uiState.value = _uiState.value.copy(
+                isGeminiLiveConnected = connected,
+                activeLiveModelName = modelName.ifBlank { "gemini-3.8-live" }
+            )
+        },
+        onSpeakingStateChanged = { isSpeaking ->
+            if (isSpeaking) {
+                micWakeDetector.setPaused(true)
+            }
+            _uiState.value = _uiState.value.copy(
+                isTalking = isSpeaking,
+                activeIdleBehavior = if (isSpeaking) IdlePetBehavior.NONE else _uiState.value.activeIdleBehavior,
+                currentEmotion = if (isSpeaking) AvatarEmotion.TALKING else AvatarEmotion.IDLE,
+                faceToFaceCallState = if (_uiState.value.isFaceToFaceActive && isSpeaking) {
+                    FaceToFaceCallState.SPEAKING
+                } else {
+                    _uiState.value.faceToFaceCallState
+                }
+            )
+            if (!isSpeaking) {
+                if (_uiState.value.isFaceToFaceActive && !_uiState.value.isFaceToFaceMuted) {
+                    onAvatarFinishedSpeakingInCall()
+                } else if (_uiState.value.isHandsFreeWakeEnabled && !_uiState.value.showVoiceDialog) {
+                    enterGeminiLiveListeningAfterSpeech(delayMs = 280L)
+                }
+            }
+        },
+        onLiveTranscriptUpdate = { partialText ->
+            if (partialText.isNotBlank()) {
+                _uiState.value = _uiState.value.copy(
+                    lastAvatarSpeech = partialText,
+                    liveAvatarSpeech = partialText
+                )
+            }
+        },
+        onTurnCompleted = { fullText ->
+            if (fullText.isNotBlank()) {
+                val state = _uiState.value
+                val liveMsg = ChatMessage(
+                    senderName = state.activeCharacter.name,
+                    text = fullText,
+                    isUser = false,
+                    emotion = AvatarEmotion.TALKING,
+                    modelUsed = state.activeLiveModelName.ifBlank { "gemini-3.8-live" }
+                )
+                _uiState.value = state.copy(
+                    messages = state.messages + liveMsg,
+                    lastAvatarSpeech = fullText,
+                    liveAvatarSpeech = fullText,
+                    isLoadingAi = false
+                )
+            }
         }
     )
 
@@ -511,7 +575,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             senderName = state.activeCharacter.name,
             text = replyText,
             isUser = false,
-            emotion = emotion
+            emotion = emotion,
+            modelUsed = state.activeLiveModelName.ifBlank { "gemini-3.8-live" }
         )
 
         isSpeakingVoiceReply = true
@@ -780,7 +845,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                         userMessage = clean,
                         character = state.activeCharacter,
                         language = state.selectedLanguage,
-                        history = updatedHistory
+                        history = updatedHistory,
+                        preferredTier = state.selectedModelTier
                     )
                 } ?: aiService.getFastFallbackReply(
                     userMessage = clean,
@@ -792,7 +858,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     senderName = state.activeCharacter.name,
                     text = reply.text,
                     isUser = false,
-                    emotion = reply.emotion
+                    emotion = reply.emotion,
+                    modelUsed = "gemini-3.8-live"
                 )
 
                 _uiState.value = _uiState.value.copy(
@@ -915,13 +982,14 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                // Generates AI reply or falls back quickly within 9.0 seconds max
-                val reply = withTimeoutOrNull(9000L) {
+                // Generates AI reply using selected or auto-routed Gemini model tier (gemini-4-argon, gemini-3.8-flash, gemini-3.1-flash-lite)
+                val reply = withTimeoutOrNull(11000L) {
                     aiService.generateReply(
                         userMessage = text,
                         character = state.activeCharacter,
                         language = state.selectedLanguage,
-                        history = updatedMessages
+                        history = updatedMessages,
+                        preferredTier = state.selectedModelTier
                     )
                 } ?: aiService.getFastFallbackReply(
                     userMessage = text,
@@ -933,7 +1001,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     senderName = state.activeCharacter.name,
                     text = reply.text,
                     isUser = false,
-                    emotion = reply.emotion
+                    emotion = reply.emotion,
+                    modelUsed = reply.modelUsed
                 )
 
                 val newAffection = (state.affectionScore + 3).coerceAtMost(100)
@@ -958,7 +1027,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     senderName = state.activeCharacter.name,
                     text = fallbackReply.text,
                     isUser = false,
-                    emotion = fallbackReply.emotion
+                    emotion = fallbackReply.emotion,
+                    modelUsed = fallbackReply.modelUsed
                 )
                 _uiState.value = _uiState.value.copy(
                     messages = _uiState.value.messages + avatarReplyMsg,
@@ -976,7 +1046,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     senderName = state.activeCharacter.name,
                     text = fallbackReply.text,
                     isUser = false,
-                    emotion = fallbackReply.emotion
+                    emotion = fallbackReply.emotion,
+                    modelUsed = fallbackReply.modelUsed
                 )
                 _uiState.value = _uiState.value.copy(
                     messages = _uiState.value.messages + avatarReplyMsg,
@@ -987,6 +1058,10 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 _uiState.value = _uiState.value.copy(isLoadingAi = false)
             }
         }
+    }
+
+    fun setModelTier(tier: GeminiModelTier) {
+        _uiState.value = _uiState.value.copy(selectedModelTier = tier)
     }
 
     fun onCharacterTouched(zone: TouchZone) {
@@ -1198,8 +1273,11 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun getCustomApiKey(): String = aiService.getCustomApiKey()
-    fun setCustomApiKey(key: String) = aiService.setCustomApiKey(key)
-    fun isGeminiConnected(): Boolean = aiService.getEffectiveApiKey().isNotBlank()
+    fun setCustomApiKey(key: String) {
+        aiService.setCustomApiKey(key)
+        ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
+    }
+    fun isGeminiConnected(): Boolean = aiService.isGeminiConnected()
 
     fun getVoiceEngineMode(): VoiceEngineMode {
         val name = prefs.getString("voice_engine_mode", VoiceEngineMode.GEMINI_FLASH_TTS.name)
@@ -1282,6 +1360,21 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
+        // Connect real-time Gemini 3.8 Live WebSocket session if API key is available
+        val apiKey = aiService.getEffectiveApiKey()
+        if (apiKey.isNotBlank()) {
+            val liveSysPrompt = aiService.buildLiveSystemInstruction(
+                character = char,
+                language = _uiState.value.selectedLanguage
+            )
+            geminiLiveClient.connect(
+                apiKey = apiKey,
+                character = char,
+                language = _uiState.value.selectedLanguage,
+                systemInstruction = liveSysPrompt
+            )
+        }
+
         // Deliver spoken opening line
         ttsEngine.playHappyChime()
         ttsEngine.speak(
@@ -1296,6 +1389,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         callTimerJob?.cancel()
         autoListenJob?.cancel()
         wakeListenJob?.cancel()
+        geminiLiveClient.disconnect()
         ttsEngine.stop()
         speechRecognitionHelper.stopListening()
 
@@ -1306,6 +1400,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             liveAvatarSpeech = "",
             liveCameraBitmap = null,
             isListeningMic = false,
+            isGeminiLiveConnected = false,
             voiceSessionState = VoiceSessionState.STANDBY_WAKE
         )
         resumeContinuousWakeStandby(500L)
@@ -1341,6 +1436,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         autoListenJob?.cancel()
         rapidSpeechErrorCount = 0
         if (_uiState.value.isTalking) {
+            geminiLiveClient.interruptPlayback()
             ttsEngine.stop()
         }
         _uiState.value = _uiState.value.copy(
@@ -1368,6 +1464,12 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             isListeningMic = false
         )
 
+        // If Gemini 3.8 Live bidirectional WebSocket is active, stream turn directly for real-time audio!
+        if (geminiLiveClient.isSetupComplete.get()) {
+            geminiLiveClient.sendUserTurn(cleanText, state.liveCameraBitmap)
+            return
+        }
+
         viewModelScope.launch {
             try {
                 val reply = withTimeoutOrNull(9500L) {
@@ -1376,7 +1478,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                         character = state.activeCharacter,
                         language = state.selectedLanguage,
                         history = updatedMessages,
-                        cameraBitmap = state.liveCameraBitmap
+                        cameraBitmap = state.liveCameraBitmap,
+                        preferredTier = state.selectedModelTier
                     )
                 } ?: aiService.getFastFallbackReply(
                     userMessage = cleanText,
@@ -1388,7 +1491,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     senderName = state.activeCharacter.name,
                     text = reply.text,
                     isUser = false,
-                    emotion = reply.emotion
+                    emotion = reply.emotion,
+                    modelUsed = "gemini-3.8-live"
                 )
 
                 val newAffection = (state.affectionScore + 3).coerceAtMost(100)
@@ -2300,6 +2404,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        geminiLiveClient.disconnect()
         micWakeDetector.stop()
         ttsEngine.release()
         speechRecognitionHelper.destroy()
