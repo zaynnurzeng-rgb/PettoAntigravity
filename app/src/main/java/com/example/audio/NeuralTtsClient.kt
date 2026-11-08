@@ -113,7 +113,20 @@ class NeuralTtsClient(
         } catch (e: Exception) {
             null
         }
-        return buildConfigKey.orEmpty()
+        if (!buildConfigKey.isNullOrBlank()) return buildConfigKey
+
+        val envKey = try {
+            val key = BuildConfig::class.java.getField("GEMINI_API_KEY_ENV").get(null) as? String
+            key?.trim()?.takeIf {
+                it.isNotBlank() &&
+                    !it.contains("MY_GEMINI_API_KEY") &&
+                    !it.contains("YOUR_API_KEY") &&
+                    it != "null"
+            }
+        } catch (e: Exception) {
+            null
+        }
+        return envKey.orEmpty()
     }
 
     fun getVoiceNameForCharacter(characterId: String): String {
@@ -164,11 +177,8 @@ class NeuralTtsClient(
 
         // Gemini models supporting AUDIO output modality
         val modelsToTry = listOf(
-            "gemini-2.5-flash",
-            "gemini-3.8-flash",
             "gemini-2.0-flash",
-            "gemini-2.0-flash-exp",
-            "gemini-3.8-live"
+            "gemini-2.0-flash-exp"
         )
 
         for (modelName in modelsToTry) {
@@ -246,6 +256,7 @@ class NeuralTtsClient(
 
         val request = Request.Builder()
             .url(url)
+            .header("x-goog-api-key", apiKey)
             .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 

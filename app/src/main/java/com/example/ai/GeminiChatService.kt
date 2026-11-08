@@ -136,6 +136,7 @@ class GeminiChatService(private val context: Context? = null) {
         try {
             val req = Request.Builder()
                 .url(url)
+                .header("x-goog-api-key", cleanKey)
                 .get()
                 .build()
             client.newCall(req).execute().use { resp ->
@@ -207,7 +208,20 @@ class GeminiChatService(private val context: Context? = null) {
         } catch (e: Exception) {
             null
         }
-        return buildConfigKey.orEmpty()
+        if (!buildConfigKey.isNullOrBlank()) return buildConfigKey
+
+        val envKey = try {
+            val key = BuildConfig::class.java.getField("GEMINI_API_KEY_ENV").get(null) as? String
+            key?.trim()?.takeIf {
+                it.isNotBlank() &&
+                    !it.contains("MY_GEMINI_API_KEY") &&
+                    !it.contains("YOUR_API_KEY") &&
+                    it != "null"
+            }
+        } catch (e: Exception) {
+            null
+        }
+        return envKey.orEmpty()
     }
 
     fun isGeminiConnected(): Boolean {
@@ -761,6 +775,7 @@ class GeminiChatService(private val context: Context? = null) {
 
         val request = Request.Builder()
             .url(url)
+            .header("x-goog-api-key", apiKey)
             .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
@@ -1355,6 +1370,7 @@ class GeminiChatService(private val context: Context? = null) {
 
         val request = Request.Builder()
             .url(url)
+            .header("x-goog-api-key", apiKey)
             .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
@@ -1455,6 +1471,7 @@ class GeminiChatService(private val context: Context? = null) {
 
         val request = Request.Builder()
             .url(url)
+            .header("x-goog-api-key", apiKey)
             .post(jsonBody.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 

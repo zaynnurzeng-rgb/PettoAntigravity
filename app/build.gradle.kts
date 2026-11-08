@@ -16,10 +16,17 @@ android {
     applicationId = "com.aistudio.pawpalai.qwkzrv"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    val envGeminiKey = (
+        project.findProperty("GEMINI_API_KEY") as? String
+        ?: System.getenv("GEMINI_API_KEY")
+        ?: ""
+    ).trim()
+    buildConfigField("String", "GEMINI_API_KEY_ENV", "\"$envGeminiKey\"")
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,

@@ -21,10 +21,25 @@ jobs:
         java-version: '17'
         cache: 'gradle'
 
-    - name: Inject Gemini API key into .env
+    - name: Inject Gemini API key into .env and local.properties
+      env:
+        SECRET_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        SECRET_GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
+        SECRET_GOOGLE_GEMINI_API_KEY: ${{ secrets.GOOGLE_GEMINI_API_KEY }}
+        SECRET_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        SECRET_API_KEY: ${{ secrets.API_KEY }}
       run: |
-        echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" > .env
-        echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env.example
+        KEY="$SECRET_GEMINI_API_KEY"
+        if [ -z "$KEY" ]; then KEY="$SECRET_GEMINI_KEY"; fi
+        if [ -z "$KEY" ]; then KEY="$SECRET_GOOGLE_GEMINI_API_KEY"; fi
+        if [ -z "$KEY" ]; then KEY="$SECRET_GOOGLE_API_KEY"; fi
+        if [ -z "$KEY" ]; then KEY="$SECRET_API_KEY"; fi
+
+        echo "GEMINI_API_KEY=$KEY" > .env
+        echo "GEMINI_API_KEY=$KEY" >> .env.example
+        touch local.properties
+        echo "GEMINI_API_KEY=$KEY" >> local.properties
+        echo "GEMINI_API_KEY successfully prepared (key length: ${#KEY})"
 
     - name: Configure google-services.json
       env:
@@ -76,6 +91,8 @@ jobs:
       run: ./gradlew test --continue || true
 
     - name: Build APK (Debug)
+      env:
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINI_KEY || secrets.GOOGLE_GEMINI_API_KEY || secrets.GOOGLE_API_KEY || secrets.API_KEY }}
       run: ./gradlew assembleDebug --stacktrace
 
     - name: Upload APK

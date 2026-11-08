@@ -457,7 +457,7 @@ fun AvatarRoomScreen(
                 },
                 onClearMemories = { viewModel.clearMemories() },
                 isGeminiConnected = viewModel.isGeminiConnected(),
-                currentApiKey = viewModel.getCustomApiKey(),
+                currentApiKey = viewModel.getEffectiveApiKey(),
                 onApiKeySaved = { newKey -> viewModel.setCustomApiKey(newKey) },
                 onTestApiKey = { key, onResult -> viewModel.testApiKey(key, onResult) },
                 onDismiss = { showSettings = false }
@@ -569,7 +569,7 @@ fun AvatarRoomScreen(
                 isSolving = uiState.isSolvingHomework,
                 photoBitmap = uiState.homeworkPhotoBitmap,
                 isGeminiConnected = viewModel.isGeminiConnected(),
-                currentApiKey = viewModel.getCustomApiKey(),
+                currentApiKey = viewModel.getEffectiveApiKey(),
                 onSaveApiKey = { viewModel.setCustomApiKey(it) },
                 onSelectSubject = { viewModel.setHomeworkSubject(it) },
                 onQuestionChange = { viewModel.setHomeworkQuestion(it) },

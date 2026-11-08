@@ -736,7 +736,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         ttsEngine.engineMode = initialMode
         ttsEngine.elevenLabsApiKey = getElevenLabsApiKey()
-        ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
+        ttsEngine.googleApiKey = aiService.getEffectiveApiKey()
         ttsEngine.setVoiceProfile(initialChar.defaultVoicePitch, initialChar.defaultSpeechRate)
         ttsEngine.setLanguage(_uiState.value.selectedLanguage)
 
@@ -1368,6 +1368,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun getCustomApiKey(): String = aiService.getCustomApiKey()
+    fun getEffectiveApiKey(): String = aiService.getEffectiveApiKey()
     fun setCustomApiKey(key: String) {
         val trimmed = key.trim()
         aiService.setCustomApiKey(trimmed)
