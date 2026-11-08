@@ -9,28 +9,28 @@ enum class GeminiModelTier(
     val modelId: String
 ) {
     AUTO(
-        label = "Auto Pintar",
-        emoji = "🤖",
-        subtitle = "Pilih otomatis sesuai kerumitan pesan",
-        modelId = "auto"
-    ),
-    ARGON_COMPLEX(
-        label = "Pro (Kompleks)",
-        emoji = "🧠",
-        subtitle = "gemini-1.5-pro • Penalaran mendalam & analisis rumit",
-        modelId = "gemini-1.5-pro"
+        label = "Auto Cerdas",
+        emoji = "âœ¨",
+        subtitle = "Gemini 3.8 Flash â€¢ Routing otomatis sesuai topik",
+        modelId = "gemini-3.8-flash"
     ),
     FLASH_GENERAL(
-        label = "Flash (Umum)",
-        emoji = "⚡",
-        subtitle = "gemini-2.0-flash • Obrolan cerdas & multimodal",
-        modelId = "gemini-2.0-flash"
+        label = "Gemini 3.8 Flash",
+        emoji = "âš¡",
+        subtitle = "gemini-3.8-flash â€¢ Cepat, cerdas, ekspresif & responsif",
+        modelId = "gemini-3.8-flash"
+    ),
+    ARGON_COMPLEX(
+        label = "Gemini 4 Argon",
+        emoji = "ðŸ§ ",
+        subtitle = "gemini-4-argon â€¢ Penalaran kompleks & tugas sains",
+        modelId = "gemini-4-argon"
     ),
     FLASH_LITE_FAST(
-        label = "Flash-Lite (Kilat)",
-        emoji = "🚀",
-        subtitle = "gemini-1.5-flash • Respon kilat & hemat kuota",
-        modelId = "gemini-1.5-flash"
+        label = "Gemini 3.1 Flash-Lite",
+        emoji = "ðŸš€",
+        subtitle = "gemini-3.1-flash-lite â€¢ Respon kilat & hemat kuota",
+        modelId = "gemini-3.1-flash-lite"
     )
 }
 

@@ -177,6 +177,8 @@ class NeuralTtsClient(
 
         // Gemini models supporting AUDIO output modality
         val modelsToTry = listOf(
+            "gemini-3.8-flash",
+            "gemini-3.8-live",
             "gemini-2.0-flash",
             "gemini-2.0-flash-exp"
         )

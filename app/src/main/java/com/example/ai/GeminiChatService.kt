@@ -153,9 +153,11 @@ class GeminiChatService(private val context: Context? = null) {
                                 val name = mObj.optString("name").replace("models/", "").trim()
                                 val methods = mObj.optJSONArray("supportedGenerationMethods")?.toString() ?: ""
                                 if (methods.contains("generateContent")) {
-                                    if (name.contains("flash", ignoreCase = true)) {
+                                    if (name.contains("3.8", ignoreCase = true) || name.contains("3-8", ignoreCase = true)) {
                                         foundModel = name
                                         break
+                                    } else if (name.contains("flash", ignoreCase = true) && foundModel.isBlank()) {
+                                        foundModel = name
                                     } else if (foundModel.isBlank()) {
                                         foundModel = name
                                     }
@@ -166,7 +168,7 @@ class GeminiChatService(private val context: Context? = null) {
                         Log.d(TAG, "Parsing models catalog skipped: ${e.message}")
                     }
 
-                    val chosenModel = foundModel.ifBlank { "gemini-2.5-flash" }
+                    val chosenModel = foundModel.ifBlank { "gemini-3.8-flash" }
                     activeDiscoveredModel = chosenModel
                     prefs?.edit()?.putString("active_gemini_model", chosenModel)?.apply()
 
@@ -348,7 +350,7 @@ class GeminiChatService(private val context: Context? = null) {
                     "gemini-2.5-pro",
                     "gemini-1.5-pro",
                     discovered.takeIf { it.isNotBlank() },
-                    "gemini-2.5-flash",
+                    "gemini-3.8-flash",
                     "gemini-3.8-flash"
                 ).distinct()
                 GeminiModelTier.FLASH_LITE_FAST -> listOfNotNull(
@@ -356,14 +358,15 @@ class GeminiChatService(private val context: Context? = null) {
                     "gemini-3.5-flash-lite",
                     "gemini-2.0-flash-lite",
                     discovered.takeIf { it.isNotBlank() },
-                    "gemini-2.5-flash",
+                    "gemini-3.8-flash",
                     "gemini-1.5-flash"
                 ).distinct()
                 else -> listOfNotNull(
-                    discovered.takeIf { it.isNotBlank() },
-                    "gemini-2.5-flash",
                     "gemini-3.8-flash",
-                    "gemini-3.5-flash",
+                    "gemini-3.8-live",
+                    discovered.takeIf { it.isNotBlank() },
+                    "gemini-4-argon",
+                    "gemini-2.5-flash",
                     "gemini-2.0-flash",
                     "gemini-1.5-flash"
                 ).distinct()
