@@ -52,7 +52,7 @@ fun MyApplicationTheme(
 }
 
 @Composable
-fun PawPalTheme(
+fun PettoAntigravityTheme(
   darkTheme: Boolean = isSystemInDarkTheme(),
   dynamicColor: Boolean = false,
   content: @Composable () -> Unit,

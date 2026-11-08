@@ -71,7 +71,7 @@ class GeminiLiveSessionClient(
 
     private fun resolveEffectiveApiKey(provided: String): String {
         if (provided.isNotBlank()) return provided.trim()
-        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
         val customKey = prefs.getString("custom_gemini_api_key", "")?.trim().orEmpty()
         if (customKey.isNotBlank()) return customKey
 

@@ -21,7 +21,7 @@ data class MemoryFact(
  */
 class PetMemoryManager(context: Context) {
 
-    private val prefs = context.getSharedPreferences("pawpal_ai_memory_prefs", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("pettoantigravity_memory_prefs", Context.MODE_PRIVATE)
 
     fun getUserNickname(): String {
         return prefs.getString(KEY_NICKNAME, "")?.trim().orEmpty()

@@ -193,7 +193,7 @@ class StoryAdventureRepository(context: Context) {
 
     companion object {
         private const val TAG = "StoryAdventureRepo"
-        private const val PREFS_NAME = "pawpal_story_adventures_prefs"
+        private const val PREFS_NAME = "pettoantigravity_story_prefs"
         private const val KEY_SESSIONS_JSON = "saved_story_sessions_v1"
         private const val MAX_SAVED_SESSIONS = 12
     }

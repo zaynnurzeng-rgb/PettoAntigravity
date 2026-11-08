@@ -91,7 +91,7 @@ class NeuralTtsClient(
 
     private fun resolveEffectiveGeminiKey(providedKey: String): String {
         if (providedKey.isNotBlank()) return providedKey.trim()
-        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
         val savedCustom = prefs.getString("custom_gemini_api_key", "")?.trim().orEmpty()
         if (savedCustom.isNotBlank()) return savedCustom
 
@@ -205,13 +205,13 @@ class NeuralTtsClient(
     private class GeminiTtsQuotaExceeded : Exception()
 
     private fun remainingQuotaBlockMs(): Long {
-        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
         val until = prefs.getLong("gemini_tts_blocked_until", 0L)
         return (until - System.currentTimeMillis()).coerceAtLeast(0L)
     }
 
     private fun blockQuotaFor(ms: Long) {
-        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putLong("gemini_tts_blocked_until", System.currentTimeMillis() + ms)
             .apply()

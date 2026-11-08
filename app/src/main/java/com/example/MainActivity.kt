@@ -11,7 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.example.ui.AvatarViewModel
 import com.example.ui.screens.AvatarRoomScreen
-import com.example.ui.theme.PawPalTheme
+import com.example.ui.theme.PettoAntigravityTheme
 
 class MainActivity : ComponentActivity() {
     private val avatarViewModel: AvatarViewModel by viewModels()
@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
         com.example.util.configureAppCheck(this, intent)
         enableEdgeToEdge()
         setContent {
-            PawPalTheme {
+            PettoAntigravityTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = Color.Black

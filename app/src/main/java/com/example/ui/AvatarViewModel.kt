@@ -715,7 +715,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private val prefs by lazy {
-        application.getSharedPreferences("pawpal_ai_prefs", android.content.Context.MODE_PRIVATE)
+        application.getSharedPreferences("pettoantigravity_prefs", android.content.Context.MODE_PRIVATE)
     }
 
     init {

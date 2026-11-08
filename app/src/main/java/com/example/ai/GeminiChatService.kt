@@ -97,7 +97,7 @@ class GeminiChatService(private val context: Context? = null) {
         private set
 
     private val prefs by lazy {
-        context?.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        context?.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
     }
 
     private val memoryManager by lazy {
