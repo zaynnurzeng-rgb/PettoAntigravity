@@ -288,17 +288,17 @@ fun SettingsDialog(
                 val modelOptions = listOf(
                     Triple(
                         GeminiModelTier.FLASH_GENERAL,
-                        "Gemini 2.5 Flash",
-                        "Rekomendasi • Sangat cerdas, cepat & seimbang untuk semua obrolan"
+                        "Gemini 2.0 Flash",
+                        "Rekomendasi • Cerdas, cepat, responsif & multimodal"
                     ),
                     Triple(
                         GeminiModelTier.FLASH_LITE_FAST,
-                        "Gemini 2.0 Flash",
-                        "Ultra Cepat • Latensi paling rendah untuk respon instan"
+                        "Gemini 1.5 Flash",
+                        "Ultra Stabil • Respon kilat & hemat kuota"
                     ),
                     Triple(
                         GeminiModelTier.ARGON_COMPLEX,
-                        "Gemini 2.5 Pro",
+                        "Gemini 1.5 Pro",
                         "Penalaran Rumit • Paling pintar untuk analisis PR & sains"
                     )
                 )

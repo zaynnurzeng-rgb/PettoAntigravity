@@ -40,7 +40,7 @@ data class GeminiReply(
     val text: String,
     val emotion: AvatarEmotion = AvatarEmotion.TALKING,
     val isFromAi: Boolean = false,
-    val modelUsed: String = "gemini-2.5-flash"
+    val modelUsed: String = "gemini-2.0-flash"
 )
 
 data class VoiceAudioAnalysisResult(
@@ -57,15 +57,15 @@ class GeminiChatService(private val context: Context? = null) {
     private val TAG = "GeminiChatService"
 
     // Lazy initialization of Firebase AI Logic models across the 3 tiers:
-    // - gemini-2.5-pro for complex reasoning tasks
-    // - gemini-2.5-flash for general multi-turn tasks
+    // - gemini-1.5-pro for complex reasoning tasks
+    // - gemini-2.0-flash for general multi-turn tasks
     // - gemini-2.0-flash-lite for fast low-latency tasks
     private val argonModel by lazy {
-        Firebase.ai.generativeModel("gemini-2.5-pro")
+        Firebase.ai.generativeModel("gemini-1.5-pro")
     }
 
     private val flashModel by lazy {
-        Firebase.ai.generativeModel("gemini-2.5-flash")
+        Firebase.ai.generativeModel("gemini-2.0-flash")
     }
 
     private val flashLite31Model by lazy {
@@ -115,50 +115,60 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Performs a fast live test to verify if the provided Gemini API key is valid and working.
      */
+    /**
+     * Performs a fast live test to verify if the provided Gemini API key is valid and working.
+     */
     suspend fun testApiKeyConnection(key: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cleanKey = key.trim()
         if (cleanKey.isBlank()) {
             return@withContext false to "Kunci API tidak boleh kosong."
         }
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$cleanKey"
-        val json = JSONObject().apply {
-            put("contents", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("role", "user")
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().put("text", "Ping test"))
+
+        val testModels = listOf("gemini-1.5-flash", "gemini-2.0-flash")
+        var lastErr = ""
+
+        for (model in testModels) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$cleanKey"
+            val json = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().put("text", "Ping"))
+                        })
                     })
                 })
-            })
-            put("generationConfig", JSONObject().apply {
-                put("maxOutputTokens", 5)
-            })
-        }
-        try {
-            val req = Request.Builder()
-                .url(url)
-                .post(json.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-            client.newCall(req).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    lastAiCallSucceeded = true
-                    true to "Berhasil terhubung ke Google Gemini AI!"
-                } else {
-                    val code = resp.code
-                    val msg = when (code) {
-                        400 -> "Kunci API tidak valid atau format salah."
-                        403 -> "Akses ditolak (403). Pastikan Gemini API aktif di AI Studio."
-                        429 -> "Batas kuota terlampaui (Rate Limit 429). Coba beberapa saat lagi."
-                        else -> "HTTP $code: Gagal terhubung ke Gemini API."
-                    }
-                    false to msg
-                }
+                put("generationConfig", JSONObject().apply {
+                    put("maxOutputTokens", 5)
+                })
             }
-        } catch (e: Exception) {
-            false to "Gagal menghubungi server: ${e.message}"
+            try {
+                val req = Request.Builder()
+                    .url(url)
+                    .post(json.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        lastAiCallSucceeded = true
+                        return@withContext true to "Berhasil terhubung ke Google Gemini AI ($model)!"
+                    }
+                    val code = resp.code
+                    val rawBody = try { resp.body?.string().orEmpty() } catch (_: Exception) { "" }
+                    val apiMsg = try { JSONObject(rawBody).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
+                    lastErr = when (code) {
+                        400 -> apiMsg ?: "Kunci API tidak valid atau format salah (400)."
+                        403 -> "Akses ditolak (403). Pastikan Gemini API aktif di Google AI Studio."
+                        404 -> "Model $model tidak ditemukan (404)."
+                        429 -> "Batas kuota terlampaui (Rate Limit 429). Coba beberapa saat lagi."
+                        else -> "HTTP $code: "
+                    }
+                }
+            } catch (e: Exception) {
+                lastErr = "Gagal menghubungi server: ${e.message}"
+            }
         }
+        false to lastErr
     }
-
     /**
      * Returns ONLY a real Gemini API Key (from user's custom input in APK or AI Studio Secrets panel).
      * Never returns the internal Firebase google_api_key, which is not a public Gemini REST API key.
@@ -212,8 +222,8 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Automatically selects the optimal Gemini model tier based on prompt complexity
      * when `preferredTier == GeminiModelTier.AUTO`, or respects the user's manual tier selection:
-     * - Complex tasks -> gemini-2.5-pro
-     * - General tasks -> gemini-2.5-flash
+     * - Complex tasks -> gemini-1.5-pro
+     * - General tasks -> gemini-2.0-flash
      * - Fast tasks -> gemini-2.0-flash-lite
      */
     fun resolveModelTier(
@@ -249,7 +259,7 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Main multi-turn conversation generator:
      * 1. Wake words check for instant reaction (0ms).
-     * 2. Smart model tier routing (gemini-2.5-pro for complex, gemini-2.5-flash for general, gemini-2.0-flash-lite for fast).
+     * 2. Smart model tier routing (gemini-1.5-pro for complex, gemini-2.0-flash for general, gemini-2.0-flash-lite for fast).
      * 3. Full multi-turn conversation history + character role system instruction.
      * 4. Smart conversational fallback if offline/timeout.
      */
@@ -299,9 +309,9 @@ class GeminiChatService(private val context: Context? = null) {
         }
         if (apiKey.isNotBlank()) {
             val restModelsOrder = when (activeTier) {
-                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash-lite")
-                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash")
-                else -> listOf("gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
+                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite")
+                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash")
+                else -> listOf("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
             }
             try {
                 val restResult = withTimeoutOrNull(20000L) {
@@ -331,7 +341,7 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 3. Try Firebase AI Logic with the selected model tier (gemini-2.5-pro / gemini-2.5-flash / gemini-2.0-flash-lite)
+        // 3. Try Firebase AI Logic with the selected model tier (gemini-1.5-pro / gemini-2.0-flash / gemini-2.0-flash-lite)
         try {
             val firebaseReply = withTimeoutOrNull(20000L) {
                 callFirebaseAi(cleanMsg, character, language, history, cameraBitmap, activeTier)
@@ -409,8 +419,8 @@ class GeminiChatService(private val context: Context? = null) {
         // Order models according to the active tier (with free-tier fallback safety)
         val modelChain = when (activeTier) {
             GeminiModelTier.ARGON_COMPLEX -> listOf(
-                argonModel to "gemini-2.5-pro",
-                flashModel to "gemini-2.5-pro"
+                argonModel to "gemini-1.5-pro",
+                flashModel to "gemini-1.5-pro"
             )
             GeminiModelTier.FLASH_LITE_FAST -> listOf(
                 flashLite31Model to "gemini-2.0-flash-lite",
@@ -418,9 +428,9 @@ class GeminiChatService(private val context: Context? = null) {
                 flashModel to "gemini-2.0-flash-lite"
             )
             else -> listOf(
-                flashModel to "gemini-2.5-flash",
-                flashLite31Model to "gemini-2.5-flash",
-                flashLiteModel to "gemini-2.5-flash"
+                flashModel to "gemini-2.0-flash",
+                flashLite31Model to "gemini-2.0-flash",
+                flashLiteModel to "gemini-2.0-flash"
             )
         }
 
@@ -522,7 +532,7 @@ class GeminiChatService(private val context: Context? = null) {
         Log.i(TAG, "Voice analysis: standby=" + isStandbyWakeMode + ", durationMs=" + durationMs + ", wavBytes=" + wavBytes.size + ", keyConfigured=" + apiKey.isNotBlank())
         if (apiKey.isNotBlank()) {
             try {
-                val audioModels = listOf("gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
+                val audioModels = listOf("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
                 val jsonResp = withTimeoutOrNull(48000L) {
                     var found = ""
                     for (m in audioModels) {
@@ -551,7 +561,7 @@ class GeminiChatService(private val context: Context? = null) {
             Log.w(TAG, "Gemini audio REST skipped: no usable API key (empty or placeholder MY_GEMINI_API_KEY)")
         }
 
-        // 2. Try Firebase AI Logic (gemini-2.5-flash -> gemini-2.0-flash-lite) with multimodal audio inlineData
+        // 2. Try Firebase AI Logic (gemini-2.0-flash -> gemini-2.0-flash-lite) with multimodal audio inlineData
         try {
             val fbResp = withTimeoutOrNull(14000L) {
                 val multimodalReq = content {
@@ -783,12 +793,12 @@ class GeminiChatService(private val context: Context? = null) {
             }
         """.trimIndent()
 
-        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-2.5-flash -> gemini-2.0-flash-lite -> gemini-1.5-flash)
+        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-2.0-flash -> gemini-2.0-flash-lite -> gemini-1.5-flash)
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
                 val jsonResponse = withTimeoutOrNull(24000L) {
-                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, photoBitmap)
+                    val r25 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, photoBitmap)
                     if (r25.isNotBlank()) r25
                     else {
                         val r20 = callGeminiJson("gemini-2.0-flash-lite", apiKey, prompt, photoBitmap)
@@ -809,7 +819,7 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 2. Try Firebase AI Logic (gemini-2.5-flash -> gemini-2.0-flash-lite) immediately with multimodal photo support
+        // 2. Try Firebase AI Logic (gemini-2.0-flash -> gemini-2.0-flash-lite) immediately with multimodal photo support
         try {
             val fbJson = withTimeoutOrNull(24000L) {
                 val callModel: suspend (com.google.firebase.ai.GenerativeModel) -> String? = { model ->
@@ -1215,7 +1225,7 @@ class GeminiChatService(private val context: Context? = null) {
         if (apiKey.isNotBlank()) {
             try {
                 val rest = withTimeoutOrNull(18000L) {
-                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, null)
+                    val r25 = callGeminiJson("gemini-2.0-flash", apiKey, prompt, null)
                     if (r25.isNotBlank()) r25
                     else {
                         val r20 = callGeminiJson("gemini-2.0-flash-lite", apiKey, prompt, null)

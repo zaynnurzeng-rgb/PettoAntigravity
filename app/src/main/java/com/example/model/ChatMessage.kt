@@ -17,20 +17,20 @@ enum class GeminiModelTier(
     ARGON_COMPLEX(
         label = "Pro (Kompleks)",
         emoji = "🧠",
-        subtitle = "gemini-2.5-pro • Penalaran mendalam & analisis rumit",
-        modelId = "gemini-2.5-pro"
+        subtitle = "gemini-1.5-pro • Penalaran mendalam & analisis rumit",
+        modelId = "gemini-1.5-pro"
     ),
     FLASH_GENERAL(
         label = "Flash (Umum)",
         emoji = "⚡",
-        subtitle = "gemini-2.5-flash • Obrolan multi-turn sehari-hari",
-        modelId = "gemini-2.5-flash"
+        subtitle = "gemini-2.0-flash • Obrolan cerdas & multimodal",
+        modelId = "gemini-2.0-flash"
     ),
     FLASH_LITE_FAST(
         label = "Flash-Lite (Kilat)",
         emoji = "🚀",
-        subtitle = "gemini-2.0-flash-lite • Respons kilat & ringan",
-        modelId = "gemini-2.0-flash-lite"
+        subtitle = "gemini-1.5-flash • Respon kilat & hemat kuota",
+        modelId = "gemini-1.5-flash"
     )
 }
 
