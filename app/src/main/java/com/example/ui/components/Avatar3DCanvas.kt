@@ -116,17 +116,15 @@ fun Avatar3DCanvas(
     var activeReactionZone by remember { mutableStateOf<TouchZone?>(null) }
 
     // Natural eye blinking loop (smooth eyelid closing and opening)
-    var blinkProgress by remember { mutableStateOf(0f) }
+    val blinkAnim = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
         while (isActive) {
             delay((2800..4500).random().toLong())
-            val anim = Animatable(0f)
-            anim.animateTo(1f, tween(110, easing = LinearEasing))
-            blinkProgress = 1f
-            anim.animateTo(0f, tween(120, easing = LinearEasing))
-            blinkProgress = 0f
+            blinkAnim.animateTo(1f, tween(110, easing = LinearEasing))
+            blinkAnim.animateTo(0f, tween(120, easing = LinearEasing))
         }
     }
+    val blinkProgress = blinkAnim.value
 
     // Occasional playful ear twitch loop
     LaunchedEffect(Unit) {

@@ -268,7 +268,7 @@ fun FaceToFaceCallView(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "🎙️ ${uiState.activeLiveModelName.ifBlank { "gemini-3.8-live" }}",
+                            text = "🎙️ ${uiState.activeLiveModelName.ifBlank { "gemini-2.0-flash-live" }}",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 color = Color(0xFF6EE7B7),
                                 fontWeight = FontWeight.Bold,

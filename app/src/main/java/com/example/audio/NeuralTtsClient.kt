@@ -147,12 +147,10 @@ class NeuralTtsClient(
 
         val expressiveStylePrompt = buildExpressiveTtsPrompt(cleanText, character, language)
 
-        // Prioritized Gemini Audio/TTS models. gemini-2.0-flash-exp was removed
-        // from the API (HTTP 404), so it is no longer worth a round trip.
+        // Prioritized Gemini Audio/TTS models supporting responseModalities = ["AUDIO"]
         val modelsToTry = listOf(
-            "gemini-3.8-flash-tts",
-            "gemini-3.1-flash-tts-preview",
-            "gemini-2.5-flash-preview-tts"
+            "gemini-2.5-flash",
+            "gemini-2.0-flash"
         )
 
         // Free-tier TTS quota is tiny (~10 requests/model/day). When it is gone,

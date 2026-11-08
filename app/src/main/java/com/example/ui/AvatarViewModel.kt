@@ -154,10 +154,10 @@ data class AvatarUiState(
     val savedStorySessions: List<SavedStorySession> = emptyList(),
     val waterGlassesToday: Int = 0,
     val stretchCountToday: Int = 0,
-    // Gemini Multi-Turn Model Tier & Gemini 3.8 Live Real-Time Session state
+    // Gemini Multi-Turn Model Tier & Gemini Live Real-Time Session state
     val selectedModelTier: GeminiModelTier = GeminiModelTier.AUTO,
     val isGeminiLiveConnected: Boolean = false,
-    val activeLiveModelName: String = "gemini-3.8-live"
+    val activeLiveModelName: String = "gemini-2.0-flash-live"
 )
 
 data class HomeworkSolution(
@@ -229,7 +229,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         onConnectionStateChanged = { connected, modelName ->
             _uiState.value = _uiState.value.copy(
                 isGeminiLiveConnected = connected,
-                activeLiveModelName = modelName.ifBlank { "gemini-3.8-live" }
+                activeLiveModelName = modelName.ifBlank { "gemini-2.0-flash-live" }
             )
         },
         onSpeakingStateChanged = { isSpeaking ->
@@ -270,7 +270,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     text = fullText,
                     isUser = false,
                     emotion = AvatarEmotion.TALKING,
-                    modelUsed = state.activeLiveModelName.ifBlank { "gemini-3.8-live" }
+                    modelUsed = state.activeLiveModelName.ifBlank { "gemini-2.0-flash-live" }
                 )
                 _uiState.value = state.copy(
                     messages = state.messages + liveMsg,
@@ -603,7 +603,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             text = replyText,
             isUser = false,
             emotion = emotion,
-            modelUsed = state.activeLiveModelName.ifBlank { "gemini-3.8-live" }
+            modelUsed = state.activeLiveModelName.ifBlank { "gemini-2.0-flash-live" }
         )
 
         isSpeakingVoiceReply = true
@@ -914,7 +914,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     text = reply.text,
                     isUser = false,
                     emotion = reply.emotion,
-                    modelUsed = "gemini-3.8-live"
+                    modelUsed = "gemini-2.0-flash-live"
                 )
 
                 _uiState.value = _uiState.value.copy(
@@ -1077,7 +1077,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                // Generates AI reply using selected or auto-routed Gemini model tier (gemini-4-argon, gemini-3.8-flash, gemini-3.1-flash-lite)
+                // Generates AI reply using selected or auto-routed Gemini model tier (gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash-lite)
                 val reply = withTimeoutOrNull(11000L) {
                     aiService.generateReply(
                         userMessage = text,
@@ -1455,8 +1455,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Connect real-time Gemini 3.8 Live WebSocket session if API key is available
-        val apiKey = BuildConfig.GEMINI_API_KEY
+        // Connect real-time Gemini Live WebSocket session if API key is available
+        val apiKey = aiService.getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             val liveSysPrompt = aiService.buildLiveSystemInstruction(
                 character = char,
@@ -1465,7 +1465,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             geminiLiveClient.connect(
                 character = char,
                 language = _uiState.value.selectedLanguage,
-                systemInstruction = liveSysPrompt
+                systemInstruction = liveSysPrompt,
+                apiKey = apiKey
             )
         }
 
@@ -1586,7 +1587,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     text = reply.text,
                     isUser = false,
                     emotion = reply.emotion,
-                    modelUsed = "gemini-3.8-live"
+                    modelUsed = "gemini-2.0-flash-live"
                 )
 
                 val newAffection = (state.affectionScore + 3).coerceAtMost(100)

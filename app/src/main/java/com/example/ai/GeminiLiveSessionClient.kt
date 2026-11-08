@@ -60,7 +60,6 @@ class GeminiLiveSessionClient(
 
     private var currentModelIndex = 0
     private val liveModelsToTry = listOf(
-        "models/gemini-3.8-live",
         "models/gemini-2.0-flash-live-001",
         "models/gemini-2.0-flash-exp"
     )
@@ -70,17 +69,39 @@ class GeminiLiveSessionClient(
     private var activeSystemInstruction: String = ""
     private val currentTurnTranscript = StringBuilder()
 
+    private fun resolveEffectiveApiKey(provided: String): String {
+        if (provided.isNotBlank()) return provided.trim()
+        val prefs = context.getSharedPreferences("pawpal_ai_prefs", Context.MODE_PRIVATE)
+        val customKey = prefs.getString("custom_gemini_api_key", "")?.trim().orEmpty()
+        if (customKey.isNotBlank()) return customKey
+
+        val buildConfigKey = try {
+            val key = BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String
+            key?.trim()?.takeIf {
+                it.isNotBlank() &&
+                    !it.contains("MY_GEMINI_API_KEY") &&
+                    !it.contains("YOUR_API_KEY") &&
+                    it != "null"
+            }
+        } catch (_: Exception) {
+            null
+        }
+        return buildConfigKey.orEmpty()
+    }
+
     fun connect(
         character: PetCharacter,
         language: AppLanguage,
-        systemInstruction: String
+        systemInstruction: String,
+        apiKey: String = ""
     ) {
-        val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isBlank()) {
+        val effectiveKey = resolveEffectiveApiKey(apiKey)
+        if (effectiveKey.isBlank()) {
+            Log.w(TAG, "Cannot connect Gemini Live: API Key is blank or placeholder")
             onConnectionStateChanged(false, "")
             return
         }
-        activeApiKey = apiKey.trim()
+        activeApiKey = effectiveKey
         activeCharacter = character
         activeSystemInstruction = systemInstruction
         currentModelIndex = 0

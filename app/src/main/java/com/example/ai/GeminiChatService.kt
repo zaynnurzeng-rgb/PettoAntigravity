@@ -40,7 +40,7 @@ data class GeminiReply(
     val text: String,
     val emotion: AvatarEmotion = AvatarEmotion.TALKING,
     val isFromAi: Boolean = false,
-    val modelUsed: String = "gemini-3.8-flash"
+    val modelUsed: String = "gemini-2.5-flash"
 )
 
 data class VoiceAudioAnalysisResult(
@@ -57,23 +57,23 @@ class GeminiChatService(private val context: Context? = null) {
     private val TAG = "GeminiChatService"
 
     // Lazy initialization of Firebase AI Logic models across the 3 tiers:
-    // - gemini-4-argon for complex reasoning tasks
-    // - gemini-3.8-flash for general multi-turn tasks
-    // - gemini-3.1-flash-lite (& gemini-3.5-flash-lite) for fast low-latency tasks
+    // - gemini-2.5-pro for complex reasoning tasks
+    // - gemini-2.5-flash for general multi-turn tasks
+    // - gemini-2.0-flash-lite for fast low-latency tasks
     private val argonModel by lazy {
-        Firebase.ai.generativeModel("gemini-4-argon")
+        Firebase.ai.generativeModel("gemini-2.5-pro")
     }
 
     private val flashModel by lazy {
-        Firebase.ai.generativeModel("gemini-3.8-flash")
+        Firebase.ai.generativeModel("gemini-2.5-flash")
     }
 
     private val flashLite31Model by lazy {
-        Firebase.ai.generativeModel("gemini-3.1-flash-lite")
+        Firebase.ai.generativeModel("gemini-2.0-flash-lite")
     }
 
     private val flashLiteModel by lazy {
-        Firebase.ai.generativeModel("gemini-3.5-flash-lite")
+        Firebase.ai.generativeModel("gemini-2.0-flash-lite")
     }
 
     // Reliable HTTP client with realistic timeouts for AI reasoning
@@ -165,9 +165,9 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Automatically selects the optimal Gemini model tier based on prompt complexity
      * when `preferredTier == GeminiModelTier.AUTO`, or respects the user's manual tier selection:
-     * - Complex tasks -> gemini-4-argon
-     * - General tasks -> gemini-3.8-flash
-     * - Fast tasks -> gemini-3.1-flash-lite
+     * - Complex tasks -> gemini-2.5-pro
+     * - General tasks -> gemini-2.5-flash
+     * - Fast tasks -> gemini-2.0-flash-lite
      */
     fun resolveModelTier(
         userMessage: String,
@@ -202,7 +202,7 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Main multi-turn conversation generator:
      * 1. Wake words check for instant reaction (0ms).
-     * 2. Smart model tier routing (gemini-4-argon for complex, gemini-3.8-flash for general, gemini-3.1-flash-lite for fast).
+     * 2. Smart model tier routing (gemini-2.5-pro for complex, gemini-2.5-flash for general, gemini-2.0-flash-lite for fast).
      * 3. Full multi-turn conversation history + character role system instruction.
      * 4. Smart conversational fallback if offline/timeout.
      */
@@ -229,7 +229,7 @@ class GeminiChatService(private val context: Context? = null) {
                 text = ReactionCatalog.getWakeWordResponse(character, language),
                 emotion = AvatarEmotion.SURPRISED,
                 isFromAi = false,
-                modelUsed = "gemini-3.1-flash-lite"
+                modelUsed = "gemini-2.0-flash-lite"
             )
         }
 
@@ -237,9 +237,9 @@ class GeminiChatService(private val context: Context? = null) {
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             val restModelsOrder = when (activeTier) {
-                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-4-argon", "gemini-3.8-flash", "gemini-3.1-flash-lite")
-                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash")
-                else -> listOf("gemini-3.8-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite")
+                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash-lite")
+                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-2.0-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash")
+                else -> listOf("gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
             }
             try {
                 val restResult = withTimeoutOrNull(20000L) {
@@ -269,7 +269,7 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 3. Try Firebase AI Logic with the selected model tier (gemini-4-argon / gemini-3.8-flash / gemini-3.1-flash-lite)
+        // 3. Try Firebase AI Logic with the selected model tier (gemini-2.5-pro / gemini-2.5-flash / gemini-2.0-flash-lite)
         try {
             val firebaseReply = withTimeoutOrNull(20000L) {
                 callFirebaseAi(cleanMsg, character, language, history, cameraBitmap, activeTier)
@@ -347,18 +347,18 @@ class GeminiChatService(private val context: Context? = null) {
         // Order models according to the active tier (with free-tier fallback safety)
         val modelChain = when (activeTier) {
             GeminiModelTier.ARGON_COMPLEX -> listOf(
-                argonModel to "gemini-4-argon",
-                flashModel to "gemini-4-argon"
+                argonModel to "gemini-2.5-pro",
+                flashModel to "gemini-2.5-pro"
             )
             GeminiModelTier.FLASH_LITE_FAST -> listOf(
-                flashLite31Model to "gemini-3.1-flash-lite",
-                flashLiteModel to "gemini-3.1-flash-lite",
-                flashModel to "gemini-3.1-flash-lite"
+                flashLite31Model to "gemini-2.0-flash-lite",
+                flashLiteModel to "gemini-2.0-flash-lite",
+                flashModel to "gemini-2.0-flash-lite"
             )
             else -> listOf(
-                flashModel to "gemini-3.8-flash",
-                flashLite31Model to "gemini-3.8-flash",
-                flashLiteModel to "gemini-3.8-flash"
+                flashModel to "gemini-2.5-flash",
+                flashLite31Model to "gemini-2.5-flash",
+                flashLiteModel to "gemini-2.5-flash"
             )
         }
 
@@ -460,7 +460,7 @@ class GeminiChatService(private val context: Context? = null) {
         Log.i(TAG, "Voice analysis: standby=" + isStandbyWakeMode + ", durationMs=" + durationMs + ", wavBytes=" + wavBytes.size + ", keyConfigured=" + apiKey.isNotBlank())
         if (apiKey.isNotBlank()) {
             try {
-                val audioModels = listOf("gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.8-flash")
+                val audioModels = listOf("gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
                 val jsonResp = withTimeoutOrNull(48000L) {
                     var found = ""
                     for (m in audioModels) {
@@ -489,7 +489,7 @@ class GeminiChatService(private val context: Context? = null) {
             Log.w(TAG, "Gemini audio REST skipped: no usable API key (empty or placeholder MY_GEMINI_API_KEY)")
         }
 
-        // 2. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) with multimodal audio inlineData
+        // 2. Try Firebase AI Logic (gemini-2.5-flash -> gemini-2.0-flash-lite) with multimodal audio inlineData
         try {
             val fbResp = withTimeoutOrNull(14000L) {
                 val multimodalReq = content {
@@ -721,16 +721,16 @@ class GeminiChatService(private val context: Context? = null) {
             }
         """.trimIndent()
 
-        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-3.5-flash-lite)
+        // 1. If a real Gemini API Key is configured, call Direct Gemini REST API (gemini-2.5-flash -> gemini-2.0-flash-lite -> gemini-1.5-flash)
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
             try {
                 val jsonResponse = withTimeoutOrNull(24000L) {
-                    val r38 = callGeminiJson("gemini-3.8-flash", apiKey, prompt, photoBitmap)
-                    if (r38.isNotBlank()) r38
+                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, photoBitmap)
+                    if (r25.isNotBlank()) r25
                     else {
-                        val r31 = callGeminiJson("gemini-3.1-flash-lite", apiKey, prompt, photoBitmap)
-                        if (r31.isNotBlank()) r31 else callGeminiJson("gemini-3.5-flash-lite", apiKey, prompt, photoBitmap)
+                        val r20 = callGeminiJson("gemini-2.0-flash-lite", apiKey, prompt, photoBitmap)
+                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-1.5-flash", apiKey, prompt, photoBitmap)
                     }
                 }
 
@@ -747,7 +747,7 @@ class GeminiChatService(private val context: Context? = null) {
             }
         }
 
-        // 2. Try Firebase AI Logic (gemini-3.8-flash -> gemini-3.5-flash-lite) immediately with multimodal photo support
+        // 2. Try Firebase AI Logic (gemini-2.5-flash -> gemini-2.0-flash-lite) immediately with multimodal photo support
         try {
             val fbJson = withTimeoutOrNull(24000L) {
                 val callModel: suspend (com.google.firebase.ai.GenerativeModel) -> String? = { model ->
@@ -1153,11 +1153,11 @@ class GeminiChatService(private val context: Context? = null) {
         if (apiKey.isNotBlank()) {
             try {
                 val rest = withTimeoutOrNull(18000L) {
-                    val r38 = callGeminiJson("gemini-3.8-flash", apiKey, prompt, null)
-                    if (r38.isNotBlank()) r38
+                    val r25 = callGeminiJson("gemini-2.5-flash", apiKey, prompt, null)
+                    if (r25.isNotBlank()) r25
                     else {
-                        val r31 = callGeminiJson("gemini-3.1-flash-lite", apiKey, prompt, null)
-                        if (r31.isNotBlank()) r31 else callGeminiJson("gemini-3.5-flash-lite", apiKey, prompt, null)
+                        val r20 = callGeminiJson("gemini-2.0-flash-lite", apiKey, prompt, null)
+                        if (r20.isNotBlank()) r20 else callGeminiJson("gemini-1.5-flash", apiKey, prompt, null)
                     }
                 }
                 if (!rest.isNullOrBlank()) {

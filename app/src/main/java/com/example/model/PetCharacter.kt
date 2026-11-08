@@ -2,7 +2,7 @@ package com.example.model
 
 import androidx.compose.ui.graphics.Color
 import com.example.R
-import java.time.LocalTime
+import java.util.Calendar
 
 enum class PetSpecies(val displayName: String, val emoji: String, val imageRes: Int) {
     CAT("Kucing", "🐱", R.drawable.img_char_talking_cat),
@@ -26,7 +26,7 @@ enum class TimeOfDay(val displayName: String, val icon: String) {
     NIGHT("Malam", "🌙");
 
     companion object {
-        fun fromCurrentHour(hour: Int = LocalTime.now().hour): TimeOfDay {
+        fun fromCurrentHour(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)): TimeOfDay {
             return when (hour) {
                 in 5..7 -> DAWN
                 in 8..16 -> DAY

@@ -152,7 +152,10 @@ fun HomeworkStudyView(
                     MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
                 } else {
                     val source = ImageDecoder.createSource(context.contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source)
+                    ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                        decoder.isMutableRequired = true
+                    }
                 }
                 onSetPhoto(bitmap)
                 onSolve(if (questionText.isBlank()) "Tolong jelaskan dan selesaikan soal yang ada di foto tugas ini" else null)

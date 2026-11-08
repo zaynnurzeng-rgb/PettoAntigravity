@@ -277,7 +277,7 @@ fun ChatHistoryDialog(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Chatbot ini menjaga konteks percakapan penuh dan mendukung pemilihan otomatis antara gemini-4-argon, gemini-3.8-flash, dan gemini-3.1-flash-lite.",
+                                text = "Chatbot ini menjaga konteks percakapan penuh dan mendukung pemilihan otomatis antara gemini-2.5-pro, gemini-2.5-flash, dan gemini-2.0-flash-lite.",
                                 color = Color(0xFF94A3B8),
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.Center
