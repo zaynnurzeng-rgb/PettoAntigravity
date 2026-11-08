@@ -447,24 +447,19 @@ fun AvatarRoomScreen(
             SettingsDialog(
                 selectedLanguage = uiState.selectedLanguage,
                 onLanguageSelected = { viewModel.setLanguage(it) },
-                voicePitch = uiState.voicePitch,
-                onPitchChanged = { viewModel.setVoicePitch(it) },
-                speechRate = uiState.speechRate,
-                onSpeechRateChanged = { viewModel.setSpeechRate(it) },
+                activeCharacter = uiState.activeCharacter,
+                selectedModelTier = uiState.selectedModelTier,
+                onModelTierSelected = { viewModel.setModelTier(it) },
                 onTestVoice = { viewModel.testVoice() },
                 onClearHistory = {
                     viewModel.clearHistory()
                     showSettings = false
                 },
+                onClearMemories = { viewModel.clearMemories() },
                 isGeminiConnected = viewModel.isGeminiConnected(),
                 currentApiKey = viewModel.getCustomApiKey(),
                 onApiKeySaved = { newKey -> viewModel.setCustomApiKey(newKey) },
-                voiceEngineMode = uiState.voiceEngineMode,
-                onVoiceEngineModeSelected = { viewModel.setVoiceEngineMode(it) },
-                elevenLabsApiKey = viewModel.getElevenLabsApiKey(),
-                onElevenLabsApiKeySaved = { viewModel.setElevenLabsApiKey(it) },
-                googleCloudTtsApiKey = viewModel.getGoogleCloudTtsApiKey(),
-                onGoogleCloudTtsApiKeySaved = { viewModel.setGoogleCloudTtsApiKey(it) },
+                onTestApiKey = { key, onResult -> viewModel.testApiKey(key, onResult) },
                 onDismiss = { showSettings = false }
             )
         }

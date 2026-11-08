@@ -28,24 +28,9 @@ import java.util.concurrent.TimeUnit
 
 enum class VoiceEngineMode(val displayName: String, val icon: String, val description: String) {
     GEMINI_FLASH_TTS(
-        displayName = "Gemini AI Expressive Voice (100% AI)",
-        icon = "🎙️",
-        description = "Suara murni Gemini AI penuh ekspresi emosi sesuai sifat tiap karakter (Tanpa fallback TTS robotik)."
-    ),
-    CARTOON_MIMIC(
-        displayName = "Gemini AI Expressive (Gaya Kartun)",
-        icon = "🐱",
-        description = "Suara Gemini AI dengan intonasi karakter animasi yang hidup dan ekspresif."
-    ),
-    GOOGLE_CLOUD_NEURAL(
-        displayName = "Google Cloud Neural2 Voice",
-        icon = "🌐",
-        description = "Intonasi manusia alami dan ekspresif menggunakan Google Cloud Text-to-Speech Neural2."
-    ),
-    ELEVENLABS_NEURAL(
-        displayName = "ElevenLabs Neural Voice",
+        displayName = "Gemini AI Voice",
         icon = "✨",
-        description = "Suara AI hiper-realistis dengan emosi mendalam dan gaya ekspresi dinamis."
+        description = "Suara alami dan ekspresif menggunakan teknologi Google Gemini AI Audio."
     )
 }
 
@@ -58,18 +43,21 @@ class NeuralTtsClient(
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(22, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    // In-memory LRU audio cache so replaying or repeating greetings plays instantaneously
+    // In-memory LRU audio cache for fast playback
     private val audioCache = Collections.synchronizedMap(
-        object : LinkedHashMap<String, Pair<ByteArray, String>>(24, 0.75f, true) {
+        object : LinkedHashMap<String, Pair<ByteArray, String>>(40, 0.75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<ByteArray, String>>?): Boolean {
-                return size > 20
+                return size > 40
             }
         }
     )
+
+    @Volatile
+    private var rateLimitCooldownUntilMs: Long = 0L
 
     fun stop() {
         try {
@@ -89,6 +77,10 @@ class NeuralTtsClient(
         }
     }
 
+    fun clearCooldown() {
+        rateLimitCooldownUntilMs = 0L
+    }
+
     private fun resolveEffectiveGeminiKey(providedKey: String): String {
         if (providedKey.isNotBlank()) return providedKey.trim()
         val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
@@ -103,16 +95,24 @@ class NeuralTtsClient(
                     !it.contains("YOUR_API_KEY") &&
                     it != "null"
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             null
         }
         return buildConfigKey.orEmpty()
     }
 
+    fun getVoiceNameForCharacter(characterId: String): String {
+        return when (characterId) {
+            "zayn" -> "Puck"     // Youthful, expressive, lively tone
+            "siti" -> "Aoede"    // Warm, gentle, affectionate female voice
+            "rizky" -> "Fenrir"  // Firm, disciplined, energetic voice
+            "jamal" -> "Charon"  // Deep, relaxed, laid-back voice
+            else -> "Kore"       // Expressive, friendly voice
+        }
+    }
+
     /**
-     * Synthesize and play expressive character speech using Gemini AI Native Audio / TTS.
-     * Supports character-specific voice personas and emotional acting directions,
-     * with automatic retry and zero robotic Android TTS fallback.
+     * Synthesize and play expressive character speech using Gemini AI Native Audio.
      */
     suspend fun speakWithGeminiTts(
         text: String,
@@ -125,18 +125,11 @@ class NeuralTtsClient(
 
         val effectiveKey = resolveEffectiveGeminiKey(apiKey)
         if (effectiveKey.isBlank()) {
-            Log.w(TAG, "Gemini API Key is not set yet; skipping Gemini TTS synthesis")
+            Log.d(TAG, "Gemini API Key is not set; skipping Gemini Audio")
             return@withContext false
         }
 
-        val voiceName = when (character.id) {
-            "zayn" -> "Puck"     // Youthful, lively, expressive tsundere tone
-            "siti" -> "Aoede"    // Warm, gentle, affectionate female voice
-            "rizky" -> "Fenrir"  // Firm, disciplined, energetic voice
-            "jamal" -> "Charon"  // Deep, relaxed, laid-back capybara voice
-            else -> "Orus"       // Bold, resonant, expressive bear voice
-        }
-
+        val voiceName = getVoiceNameForCharacter(character.id)
         val cacheKey = "${character.id}_${language.code}_${cleanText.hashCode()}"
         audioCache[cacheKey]?.let { (cachedBytes, cachedSuffix) ->
             stop()
@@ -145,90 +138,46 @@ class NeuralTtsClient(
             }
         }
 
-        val expressiveStylePrompt = buildExpressiveTtsPrompt(cleanText, character, language)
-
-        // Prioritized Gemini Audio/TTS models supporting responseModalities = ["AUDIO"]
-        val modelsToTry = listOf(
-            "gemini-2.5-flash",
-            "gemini-2.0-flash"
-        )
-
-        // Free-tier TTS quota is tiny (~10 requests/model/day). When it is gone,
-        // stop hammering the API and let SpeechTtsEngine use the system voice.
-        val blockedForMs = remainingQuotaBlockMs()
-        if (blockedForMs > 0) {
-            Log.d(TAG, "Gemini TTS skipped: quota cooldown ${blockedForMs / 60000} min remaining")
+        // Short in-memory rate limit cooldown (15 seconds max)
+        val now = System.currentTimeMillis()
+        if (now < rateLimitCooldownUntilMs) {
+            Log.d(TAG, "Gemini TTS cooldown active for ${(rateLimitCooldownUntilMs - now) / 1000}s")
             return@withContext false
         }
 
-        // Up to 2 passes in case of transient network hiccup
-        var quotaExhausted = false
-        for (attempt in 1..2) {
-            for (modelName in modelsToTry) {
-                try {
-                    val isDedicatedTtsModel = modelName.contains("tts", ignoreCase = true)
-                    val audioResult = requestGeminiAudio(
-                        modelName = modelName,
-                        apiKey = effectiveKey,
-                        voiceName = voiceName,
-                        character = character,
-                        rawText = cleanText,
-                        expressivePrompt = expressiveStylePrompt,
-                        isDedicatedTtsModel = isDedicatedTtsModel
-                    )
-                    if (audioResult != null) {
-                        val (playableBytes, suffix) = audioResult
-                        audioCache[cacheKey] = playableBytes to suffix
-                        stop()
-                        if (playAudioBytes(playableBytes, suffix)) {
-                            Log.d(TAG, "Gemini AI Voice succeeded using $modelName ($voiceName)")
-                            return@withContext true
-                        }
+        val expressiveStylePrompt = buildExpressiveTtsPrompt(cleanText, character, language)
+
+        // Gemini models officially supporting AUDIO output modality
+        val modelsToTry = listOf(
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp"
+        )
+
+        for (modelName in modelsToTry) {
+            try {
+                val audioResult = requestGeminiAudio(
+                    modelName = modelName,
+                    apiKey = effectiveKey,
+                    voiceName = voiceName,
+                    character = character,
+                    rawText = cleanText,
+                    expressivePrompt = expressiveStylePrompt
+                )
+                if (audioResult != null) {
+                    val (playableBytes, suffix) = audioResult
+                    audioCache[cacheKey] = playableBytes to suffix
+                    stop()
+                    if (playAudioBytes(playableBytes, suffix)) {
+                        Log.d(TAG, "Gemini AI Voice succeeded using $modelName ($voiceName)")
+                        return@withContext true
                     }
-                } catch (quota: GeminiTtsQuotaExceeded) {
-                    Log.w(TAG, "Gemini TTS quota exhausted; switching to system voice")
-                    quotaExhausted = true
-                    break
-                } catch (e: Exception) {
-                    Log.d(TAG, "Gemini TTS ($modelName, attempt $attempt) error: ${e.message}")
                 }
-            }
-            if (quotaExhausted) break
-            if (attempt == 1) {
-                delay(350L)
+            } catch (e: Exception) {
+                Log.d(TAG, "Gemini TTS ($modelName) error: ${e.message}")
             }
         }
 
         return@withContext false
-    }
-
-    private class GeminiTtsQuotaExceeded : Exception()
-
-    private fun remainingQuotaBlockMs(): Long {
-        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
-        val until = prefs.getLong("gemini_tts_blocked_until", 0L)
-        return (until - System.currentTimeMillis()).coerceAtLeast(0L)
-    }
-
-    private fun blockQuotaFor(ms: Long) {
-        val prefs = context.getSharedPreferences("pettoantigravity_prefs", Context.MODE_PRIVATE)
-        prefs.edit()
-            .putLong("gemini_tts_blocked_until", System.currentTimeMillis() + ms)
-            .apply()
-    }
-
-    /**
-     * Reads the "Please retry in 18h30m18.1s" hint from a Gemini 429 body and
-     * returns the cooldown to apply. Falls back to one hour when unparseable.
-     */
-    private fun parseQuotaCooldownMs(errorMessage: String): Long {
-        val match = Regex("retry in (?:([0-9]+)h)?(?:([0-9]+)m)?", RegexOption.IGNORE_CASE).find(errorMessage)
-        val hours = match?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-        val minutes = match?.groupValues?.getOrNull(2)?.toLongOrNull() ?: 0L
-        val parsed = (hours * 60 + minutes) * 60_000L
-        val cooldown = if (parsed > 0L) parsed else 60 * 60_000L
-        // Never block longer than a day; the free-tier quota resets daily anyway.
-        return cooldown.coerceIn(5 * 60_000L, 24 * 60 * 60_000L)
     }
 
     private fun requestGeminiAudio(
@@ -237,25 +186,21 @@ class NeuralTtsClient(
         voiceName: String,
         character: PetCharacter,
         rawText: String,
-        expressivePrompt: String,
-        isDedicatedTtsModel: Boolean
+        expressivePrompt: String
     ): Pair<ByteArray, String>? {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
 
         val jsonBody = JSONObject().apply {
-            if (!isDedicatedTtsModel) {
-                // For multimodal models like gemini-2.0-flash-exp, use system_instruction so it reads the exact text with emotion
-                put("system_instruction", JSONObject().apply {
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().put(
-                            "text",
-                            "Kamu adalah pengisi suara karakter 3D bernama ${character.name}. " +
-                                "Tugasmu HANYA membacakan persis kalimat yang diberikan pengguna dengan ekspresi emosi, intonasi hidup, " +
-                                "dan sifat ${character.name} tanpa menambah, mengurangi, atau menjawab kata-katanya."
-                        ))
-                    })
+            put("system_instruction", JSONObject().apply {
+                put("parts", JSONArray().apply {
+                    put(JSONObject().put(
+                        "text",
+                        "Kamu adalah pengisi suara karakter ${character.name}. " +
+                            "Tugasmu HANYA menyuarakan persis kalimat berikut dengan ekspresi alami, emosional, " +
+                            "dan gaya bicara khas ${character.name}. Jangan tambahkan kata pengantar atau akhiran."
+                    ))
                 })
-            }
+            })
 
             put("contents", JSONArray().apply {
                 put(JSONObject().apply {
@@ -263,7 +208,7 @@ class NeuralTtsClient(
                     put("parts", JSONArray().apply {
                         put(JSONObject().put(
                             "text",
-                            if (isDedicatedTtsModel) expressivePrompt else "Bacakan persis kalimat ini dengan penuh ekspresi: \"$rawText\""
+                            "Bacakan kalimat ini dengan penuh penghayatan karakter: \"$rawText\""
                         ))
                     })
                 })
@@ -288,31 +233,9 @@ class NeuralTtsClient(
 
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                val errorBody = try {
-                    response.body?.string().orEmpty()
-                } catch (_: Exception) {
-                    ""
-                }
-                Log.d(TAG, "Gemini TTS ($modelName) HTTP ${response.code}")
-
+                Log.d(TAG, "Gemini Audio ($modelName) HTTP ${response.code}")
                 if (response.code == 429) {
-                    val message = try {
-                        JSONObject(errorBody).optJSONObject("error")?.optString("message").orEmpty()
-                    } catch (_: Exception) {
-                        ""
-                    }
-                    val cooldown = parseQuotaCooldownMs(message)
-                    blockQuotaFor(cooldown)
-                    Log.w(
-                        TAG,
-                        "Gemini TTS quota exhausted (cooldown ${cooldown / 60_000} min): " +
-                            message.take(160)
-                    )
-                    throw GeminiTtsQuotaExceeded()
-                }
-
-                if (response.code == 404) {
-                    Log.d(TAG, "Gemini TTS model $modelName not available (removed/renamed)")
+                    rateLimitCooldownUntilMs = System.currentTimeMillis() + 15_000L
                 }
                 return null
             }
@@ -351,50 +274,35 @@ class NeuralTtsClient(
         return null
     }
 
-    /**
-     * Builds an expressive voice-acting prompt tailored to each character's personality
-     * for Gemini Native TTS (`gemini-2.5-flash-preview-tts`).
-     */
     private fun buildExpressiveTtsPrompt(
         text: String,
         character: PetCharacter,
         language: AppLanguage
     ): String {
         val styleInstruction = when (character.id) {
-            "zayn" -> "Ucapkan dalam bahasa ${language.displayName} dengan intonasi remaja yang sangat ekspresif, lincah, agak gengsi/tsundere tapi perhatian"
-            "siti" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara perempuan yang sangat lembut, hangat, manis, penuh kasih sayang, dan menenangkan"
-            "rizky" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara yang tegas, penuh semangat, sigap, antusias, dan berwibawa"
-            "jamal" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara yang santai, kalem, akrab, dan agak mengantuk khas sahabat yang santuy"
-            else -> "Ucapkan dalam bahasa ${language.displayName} dengan suara beruang yang lantang, ekspresif, kocak, dan penuh energi"
+            "zayn" -> "Ucapkan dalam bahasa ${language.displayName} dengan intonasi remaja yang ekspresif, tsundere, tapi perhatian"
+            "siti" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara perempuan yang lembut, manis, penuh kasih sayang"
+            "rizky" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara yang tegas, disiplin, bersemangat"
+            "jamal" -> "Ucapkan dalam bahasa ${language.displayName} dengan suara santai, santuy, agak mengantuk dan bersahabat"
+            else -> "Ucapkan dalam bahasa ${language.displayName} dengan suara bersahabat, ceria, dan ekspresif"
         }
         return "$styleInstruction: \"$text\""
     }
 
-    private fun sanitizeTextForSpeech(rawText: String): String {
-        // Strip decorative markdown symbols while keeping punctuation for natural intonation
-        return rawText
-            .replace(Regex("[*_~`#>]"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+    private fun isContainerFormat(data: ByteArray): Boolean {
+        if (data.size < 4) return false
+        val isWav = data[0] == 'R'.code.toByte() && data[1] == 'I'.code.toByte() &&
+            data[2] == 'F'.code.toByte() && data[3] == 'F'.code.toByte()
+        val isMp3 = (data[0] == 0xFF.toByte() && (data[1].toInt() and 0xE0) == 0xE0) ||
+            (data[0] == 'I'.code.toByte() && data[1] == 'D'.code.toByte() && data[2] == '3'.code.toByte())
+        val isOgg = data[0] == 'O'.code.toByte() && data[1] == 'g'.code.toByte() &&
+            data[2] == 'g'.code.toByte() && data[3] == 'S'.code.toByte()
+        return isWav || isMp3 || isOgg
     }
 
     private fun parseSampleRateFromMime(mimeType: String): Int {
-        val match = Regex("rate=(\\d+)", RegexOption.IGNORE_CASE).find(mimeType)
-        val parsed = match?.groupValues?.getOrNull(1)?.toIntOrNull()
-        return if (parsed != null && parsed in 8000..48000) parsed else 24000
-    }
-
-    private fun isContainerFormat(bytes: ByteArray): Boolean {
-        if (bytes.size < 4) return false
-        val h0 = bytes[0].toInt() and 0xFF
-        val h1 = bytes[1].toInt() and 0xFF
-        val h2 = bytes[2].toInt() and 0xFF
-        val h3 = bytes[3].toInt() and 0xFF
-        if (h0 == 'R'.code && h1 == 'I'.code && h2 == 'F'.code && h3 == 'F'.code) return true
-        if (h0 == 'I'.code && h1 == 'D'.code && h2 == '3'.code) return true
-        if (h0 == 'O'.code && h1 == 'g'.code && h2 == 'g'.code && h3 == 'S'.code) return true
-        if (h0 == 0xFF && (h1 and 0xE0) == 0xE0) return true
-        return false
+        val match = Regex("rate=([0-9]+)", RegexOption.IGNORE_CASE).find(mimeType)
+        return match?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 24000
     }
 
     private fun wrapPcmInWavHeader(
@@ -429,125 +337,7 @@ class NeuralTtsClient(
         return out.toByteArray()
     }
 
-    /**
-     * Synthesize and play speech via Google Cloud Text-to-Speech (Neural2 / Journey).
-     */
-    suspend fun speakWithGoogleCloud(
-        text: String,
-        apiKey: String,
-        character: PetCharacter,
-        language: AppLanguage,
-        pitch: Float,
-        rate: Float
-    ): Boolean = withContext(Dispatchers.IO) {
-        val effectiveKey = resolveEffectiveGeminiKey(apiKey)
-        if (effectiveKey.isBlank()) {
-            Log.w(TAG, "Google Cloud TTS API Key is blank")
-            return@withContext false
-        }
-
-        try {
-            stop()
-
-            val (langCode, voiceName) = getGoogleVoiceConfig(language, character)
-            val pitchSemitones = ((pitch - 1.0f) * 8.0f).coerceIn(-12.0f, 12.0f)
-            val speedRate = rate.coerceIn(0.7f, 1.6f)
-
-            val jsonBody = JSONObject().apply {
-                put("input", JSONObject().put("text", text))
-                put("voice", JSONObject().apply {
-                    put("languageCode", langCode)
-                    put("name", voiceName)
-                })
-                put("audioConfig", JSONObject().apply {
-                    put("audioEncoding", "MP3")
-                    put("pitch", pitchSemitones)
-                    put("speakingRate", speedRate)
-                })
-            }
-
-            val request = Request.Builder()
-                .url("https://texttospeech.googleapis.com/v1/text:synthesize?key=$effectiveKey")
-                .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.w(TAG, "Google Cloud TTS error ${response.code}: ${response.message}")
-                    return@withContext false
-                }
-
-                val responseBody = response.body?.string() ?: return@withContext false
-                val audioContentBase64 = JSONObject(responseBody).optString("audioContent")
-                if (audioContentBase64.isBlank()) return@withContext false
-
-                val audioBytes = Base64.decode(audioContentBase64, Base64.DEFAULT)
-                return@withContext playAudioBytes(audioBytes, ".mp3")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Google Cloud TTS request failed", e)
-            return@withContext false
-        }
-    }
-
-    /**
-     * Synthesize and play speech via ElevenLabs Neural Voice API.
-     */
-    suspend fun speakWithElevenLabs(
-        text: String,
-        apiKey: String,
-        character: PetCharacter
-    ): Boolean = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) {
-            Log.w(TAG, "ElevenLabs API Key is blank")
-            return@withContext false
-        }
-
-        try {
-            stop()
-
-            val voiceId = when (character.id) {
-                "zayn" -> "TX3LPaxmHKxFdv7VOQHJ"
-                "siti" -> "EXAVITQu4vr4xnSDxMaL"
-                "rizky" -> "pNInz6obpgDQGcFmaJgB"
-                "jamal" -> "onwK4e9ZLuTAKqWW03F9"
-                else -> "VR6AewLTigWG4xSOukaG"
-            }
-
-            val jsonBody = JSONObject().apply {
-                put("text", text)
-                put("model_id", "eleven_multilingual_v2")
-                put("voice_settings", JSONObject().apply {
-                    put("stability", 0.40)
-                    put("similarity_boost", 0.85)
-                    put("style", 0.45)
-                    put("use_speaker_boost", true)
-                })
-            }
-
-            val request = Request.Builder()
-                .url("https://api.elevenlabs.io/v1/text-to-speech/$voiceId")
-                .addHeader("xi-api-key", apiKey)
-                .addHeader("Accept", "audio/mpeg")
-                .post(jsonBody.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.w(TAG, "ElevenLabs error ${response.code}: ${response.message}")
-                    return@withContext false
-                }
-
-                val audioBytes = response.body?.bytes() ?: return@withContext false
-                return@withContext playAudioBytes(audioBytes, ".mp3")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "ElevenLabs request failed", e)
-            return@withContext false
-        }
-    }
-
-    private fun playAudioBytes(bytes: ByteArray, suffix: String = ".mp3"): Boolean {
+    private fun playAudioBytes(bytes: ByteArray, suffix: String = ".wav"): Boolean {
         try {
             val tempFile = File.createTempFile("tts_audio_", suffix, context.cacheDir)
             tempFile.deleteOnExit()
@@ -599,24 +389,11 @@ class NeuralTtsClient(
         }
     }
 
-    private fun getGoogleVoiceConfig(language: AppLanguage, character: PetCharacter): Pair<String, String> {
-        return when (language) {
-            AppLanguage.INDONESIAN -> {
-                val voiceName = if (character.id == "siti") "id-ID-Neural2-A" else "id-ID-Neural2-B"
-                "id-ID" to voiceName
-            }
-            AppLanguage.ENGLISH -> {
-                val voiceName = if (character.id == "siti") "en-US-Journey-F" else "en-US-Journey-D"
-                "en-US" to voiceName
-            }
-            AppLanguage.JAPANESE -> {
-                val voiceName = if (character.id == "siti") "ja-JP-Neural2-B" else "ja-JP-Neural2-C"
-                "ja-JP" to voiceName
-            }
-            AppLanguage.SPANISH -> {
-                val voiceName = if (character.id == "siti") "es-ES-Neural2-A" else "es-ES-Neural2-B"
-                "es-ES" to voiceName
-            }
-        }
+    private fun sanitizeTextForSpeech(raw: String): String {
+        return raw
+            .replace(Regex("[*#_~`]"), " ")
+            .replace(Regex("\\bhttps?://\\S+"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 }

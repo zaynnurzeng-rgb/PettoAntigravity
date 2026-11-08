@@ -113,6 +113,53 @@ class GeminiChatService(private val context: Context? = null) {
     }
 
     /**
+     * Performs a fast live test to verify if the provided Gemini API key is valid and working.
+     */
+    suspend fun testApiKeyConnection(key: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val cleanKey = key.trim()
+        if (cleanKey.isBlank()) {
+            return@withContext false to "Kunci API tidak boleh kosong."
+        }
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$cleanKey"
+        val json = JSONObject().apply {
+            put("contents", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().apply {
+                        put(JSONObject().put("text", "Ping test"))
+                    })
+                })
+            })
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 5)
+            })
+        }
+        try {
+            val req = Request.Builder()
+                .url(url)
+                .post(json.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    lastAiCallSucceeded = true
+                    true to "Berhasil terhubung ke Google Gemini AI!"
+                } else {
+                    val code = resp.code
+                    val msg = when (code) {
+                        400 -> "Kunci API tidak valid atau format salah."
+                        403 -> "Akses ditolak (403). Pastikan Gemini API aktif di AI Studio."
+                        429 -> "Batas kuota terlampaui (Rate Limit 429). Coba beberapa saat lagi."
+                        else -> "HTTP $code: Gagal terhubung ke Gemini API."
+                    }
+                    false to msg
+                }
+            }
+        } catch (e: Exception) {
+            false to "Gagal menghubungi server: ${e.message}"
+        }
+    }
+
+    /**
      * Returns ONLY a real Gemini API Key (from user's custom input in APK or AI Studio Secrets panel).
      * Never returns the internal Firebase google_api_key, which is not a public Gemini REST API key.
      */
@@ -235,6 +282,21 @@ class GeminiChatService(private val context: Context? = null) {
 
         // 2. If user has a real Gemini API Key (via Secrets or in-app input), try Direct Gemini REST API first
         val apiKey = getEffectiveApiKey()
+        if (apiKey.isBlank()) {
+            val noKeyNotice = when (character.id) {
+                "zayn" -> "Hmph! Aku belum bisa mikir pintar karena Gemini API Key belum kamu masukkan! Buka ikon Pengaturan (⚙️) di atas dan masukkan kuncimu dulu ya, baru kita ngobrol!"
+                "siti" -> "Halo sayangku manis... Gemini AI Siti belum aktif nih. Masukkan Gemini API Key di menu Pengaturan (⚙️) ya, agar Siti bisa menjawab semua pertanyaanmu dengan cerdas!"
+                "rizky" -> "Lapor! Sistem Gemini AI belum terhubung! Silakan pasang Gemini API Key di menu Pengaturan (⚙️) agar saya siap bertugas secara maksimal!"
+                "jamal" -> "Bro, Gemini API Key-nya belum dipasang nih di Pengaturan (⚙️). Pasang dulu yuk biar kita bisa ngobrol santai dan seru!"
+                else -> "HEH! Pasang dulu kunci Gemini API di Pengaturan (⚙️) kalau mau gua mikir cerdas!"
+            }
+            return@withContext GeminiReply(
+                text = noKeyNotice,
+                emotion = AvatarEmotion.SURPRISED,
+                isFromAi = false,
+                modelUsed = targetModelId
+            )
+        }
         if (apiKey.isNotBlank()) {
             val restModelsOrder = when (activeTier) {
                 GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash-lite")

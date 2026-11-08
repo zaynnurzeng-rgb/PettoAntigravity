@@ -1,7 +1,6 @@
 package com.example.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,19 +20,22 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Divider
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,46 +53,59 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.audio.VoiceEngineMode
 import com.example.model.AppLanguage
+import com.example.model.GeminiModelTier
+import com.example.model.PetCharacter
 
 @Composable
 fun SettingsDialog(
     selectedLanguage: AppLanguage,
     onLanguageSelected: (AppLanguage) -> Unit,
-    voicePitch: Float,
-    onPitchChanged: (Float) -> Unit,
-    speechRate: Float,
-    onSpeechRateChanged: (Float) -> Unit,
+    activeCharacter: PetCharacter,
+    selectedModelTier: GeminiModelTier,
+    onModelTierSelected: (GeminiModelTier) -> Unit,
     onTestVoice: () -> Unit,
     onClearHistory: () -> Unit,
-    isGeminiConnected: Boolean = true,
+    onClearMemories: () -> Unit,
+    isGeminiConnected: Boolean = false,
     currentApiKey: String = "",
     onApiKeySaved: (String) -> Unit = {},
-    voiceEngineMode: VoiceEngineMode = VoiceEngineMode.CARTOON_MIMIC,
-    onVoiceEngineModeSelected: (VoiceEngineMode) -> Unit = {},
-    elevenLabsApiKey: String = "",
-    onElevenLabsApiKeySaved: (String) -> Unit = {},
-    googleCloudTtsApiKey: String = "",
-    onGoogleCloudTtsApiKeySaved: (String) -> Unit = {},
+    onTestApiKey: (String, (Boolean, String) -> Unit) -> Unit = { _, _ -> },
     onDismiss: () -> Unit
 ) {
-    var geminiKeyInput by remember { mutableStateOf(currentApiKey) }
-    var geminiKeySavedToast by remember { mutableStateOf(false) }
+    var apiKeyInput by remember { mutableStateOf(currentApiKey) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var connectionTestResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var showSavedMessage by remember { mutableStateOf(false) }
+    var showMemoryClearedMessage by remember { mutableStateOf(false) }
 
-    var elevenLabsKeyInput by remember { mutableStateOf(elevenLabsApiKey) }
-    var elevenLabsSavedToast by remember { mutableStateOf(false) }
-
-    var googleTtsKeyInput by remember { mutableStateOf(googleCloudTtsApiKey) }
-    var googleTtsSavedToast by remember { mutableStateOf(false) }
+    val geminiVoicePersona = when (activeCharacter.id) {
+        "zayn" -> "Puck (Lincah & Ekspresif)"
+        "siti" -> "Aoede (Lembut & Manis)"
+        "rizky" -> "Fenrir (Tegas & Sigap)"
+        "jamal" -> "Charon (Santai & Kalem)"
+        else -> "Kore (Hangat & Ceria)"
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text(
-                text = "Pengaturan Suara & AI",
-                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Pengaturan PettoAntigravity",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                )
+            }
         },
         text = {
             Column(
@@ -99,205 +114,12 @@ fun SettingsDialog(
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 4.dp)
             ) {
-                // Section: Voice Engine Selection (Neural vs Cartoon Mimic)
-                Text(
-                    text = "Sistem Suara & Audio Karakter",
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = "Pilih arsitektur audio agar suara terdengar alami, ekspresif, dan tidak kaku seperti robot.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                VoiceEngineMode.values().forEach { mode ->
-                    val isSelected = mode == voiceEngineMode
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable { onVoiceEngineModeSelected(mode) }
-                            .testTag("voice_engine_${mode.name}")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(12.dp)
-                        ) {
-                            Text(text = mode.icon, fontSize = 22.sp)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = mode.displayName,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
-                                    )
-                                )
-                                Text(
-                                    text = mode.description,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = { onVoiceEngineModeSelected(mode) }
-                            )
-                        }
-                    }
-                }
-
-                // ElevenLabs Key Config
-                if (voiceEngineMode == VoiceEngineMode.ELEVENLABS_NEURAL) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Kunci ElevenLabs API",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = elevenLabsKeyInput,
-                            onValueChange = {
-                                elevenLabsKeyInput = it
-                                elevenLabsSavedToast = false
-                            },
-                            placeholder = { Text("xi-api-key...", fontSize = 12.sp) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(50.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                onElevenLabsApiKeySaved(elevenLabsKeyInput)
-                                elevenLabsSavedToast = true
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(50.dp)
-                        ) {
-                            Text("Simpan", fontSize = 12.sp)
-                        }
-                    }
-                    if (elevenLabsSavedToast) {
-                        Text(
-                            text = "✓ Kunci ElevenLabs disimpan!",
-                            style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32)),
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-
-                // Google Cloud TTS Key Config
-                if (voiceEngineMode == VoiceEngineMode.GOOGLE_CLOUD_NEURAL) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Kunci Google Cloud Text-to-Speech API",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = googleTtsKeyInput,
-                            onValueChange = {
-                                googleTtsKeyInput = it
-                                googleTtsSavedToast = false
-                            },
-                            placeholder = { Text("Google Cloud API Key...", fontSize = 12.sp) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(50.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = {
-                                onGoogleCloudTtsApiKeySaved(googleTtsKeyInput)
-                                googleTtsSavedToast = true
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(50.dp)
-                        ) {
-                            Text("Simpan", fontSize = 12.sp)
-                        }
-                    }
-                    if (googleTtsSavedToast) {
-                        Text(
-                            text = "✓ Kunci Google TTS disimpan!",
-                            style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32)),
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Voice Pitch Slider
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "Nada Suara Avatar (Pitch): ${String.format("%.2f", voicePitch)}x",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    IconButton(
-                        onClick = onTestVoice,
-                        modifier = Modifier.size(36.dp).testTag("test_voice_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Uji Suara",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                Slider(
-                    value = voicePitch,
-                    onValueChange = onPitchChanged,
-                    valueRange = 0.6f..1.9f,
-                    modifier = Modifier.fillMaxWidth().testTag("voice_pitch_slider")
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Voice Speed Slider
-                Text(
-                    text = "Kecepatan Bicara (Speed): ${String.format("%.2f", speechRate)}x",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
-                )
-                Slider(
-                    value = speechRate,
-                    onValueChange = onSpeechRateChanged,
-                    valueRange = 0.7f..1.6f,
-                    modifier = Modifier.fillMaxWidth().testTag("voice_speed_slider")
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Gemini AI Status Card
+                // SECTION 1: Google Gemini AI API Key
                 Surface(
                     shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(
@@ -307,38 +129,39 @@ fun SettingsDialog(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
+                                    imageVector = Icons.Default.Psychology,
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.size(20.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = "Google Gemini AI",
                                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                                 )
                             }
 
+                            val isConnected = isGeminiConnected || (connectionTestResult?.first == true)
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isGeminiConnected) Color(0xFFE8F5E9) else Color(0xFFFFF3E0))
+                                    .background(if (isConnected) Color(0xFFE8F5E9) else Color(0xFFFFF3E0))
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .size(7.dp)
                                         .clip(CircleShape)
-                                        .background(if (isGeminiConnected) Color(0xFF2E7D32) else Color(0xFFEF6C00))
+                                        .background(if (isConnected) Color(0xFF2E7D32) else Color(0xFFEF6C00))
                                 )
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
-                                    text = if (isGeminiConnected) "Aktif & Terhubung" else "Mode Persona Pintar",
+                                    text = if (isConnected) "Terhubung" else "Belum Diatur",
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isGeminiConnected) Color(0xFF2E7D32) else Color(0xFFEF6C00)
+                                        color = if (isConnected) Color(0xFF2E7D32) else Color(0xFFEF6C00)
                                     )
                                 )
                             }
@@ -346,59 +169,244 @@ fun SettingsDialog(
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Model Gemini 3.8 Flash, Gemini 4 Argon (Tutor PR), dan Gemini 3.8 Flash TTS aktif dengan fallback lokal otomatis.",
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            text = "Masukkan kunci API dari Google AI Studio agar karakter bisa berpikir, berbicara, dan mengenali suara & kamera secara cerdas.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Custom API Key Input
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = {
+                                apiKeyInput = it
+                                showSavedMessage = false
+                                connectionTestResult = null
+                            },
+                            placeholder = { Text("AIzaSy...", fontSize = 13.sp) },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_input")
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedTextField(
-                                value = geminiKeyInput,
-                                onValueChange = {
-                                    geminiKeyInput = it
-                                    geminiKeySavedToast = false
-                                },
-                                placeholder = { Text("Kunci Gemini API (Opsional)", fontSize = 12.sp) },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f).height(50.dp)
-                            )
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
                             Button(
                                 onClick = {
-                                    onApiKeySaved(geminiKeyInput)
-                                    geminiKeySavedToast = true
+                                    onApiKeySaved(apiKeyInput)
+                                    showSavedMessage = true
                                 },
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.height(50.dp)
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text("Simpan", fontSize = 12.sp)
+                                Text("Simpan Kunci", fontSize = 13.sp)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    if (apiKeyInput.isNotBlank()) {
+                                        isTestingConnection = true
+                                        connectionTestResult = null
+                                        onTestApiKey(apiKeyInput) { success, msg ->
+                                            isTestingConnection = false
+                                            connectionTestResult = success to msg
+                                        }
+                                    }
+                                },
+                                enabled = apiKeyInput.isNotBlank() && !isTestingConnection,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                if (isTestingConnection) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text("Uji Koneksi", fontSize = 13.sp)
+                                }
                             }
                         }
 
-                        if (geminiKeySavedToast) {
-                            Spacer(modifier = Modifier.height(4.dp))
+                        if (showSavedMessage) {
+                            Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = "✓ Kunci API berhasil disimpan!",
-                                style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32))
+                                style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32), fontWeight = FontWeight.Bold)
+                            )
+                        }
+
+                        connectionTestResult?.let { (success, message) ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (success) Icons.Default.CheckCircle else Icons.Default.Error,
+                                    contentDescription = null,
+                                    tint = if (success) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = message,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = if (success) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "💡 Gratis di: aistudio.google.com/app/apikey",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 2: Model Gemini AI
+                Text(
+                    text = "Model Gemini AI",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                val modelOptions = listOf(
+                    Triple(
+                        GeminiModelTier.FLASH_GENERAL,
+                        "Gemini 2.5 Flash",
+                        "Rekomendasi • Sangat cerdas, cepat & seimbang untuk semua obrolan"
+                    ),
+                    Triple(
+                        GeminiModelTier.FLASH_LITE_FAST,
+                        "Gemini 2.0 Flash",
+                        "Ultra Cepat • Latensi paling rendah untuk respon instan"
+                    ),
+                    Triple(
+                        GeminiModelTier.ARGON_COMPLEX,
+                        "Gemini 2.5 Pro",
+                        "Penalaran Rumit • Paling pintar untuk analisis PR & sains"
+                    )
+                )
+
+                modelOptions.forEach { (tier, name, desc) ->
+                    val isSelected = selectedModelTier == tier
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = if (isSelected) androidx.compose.foundation.BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp)
+                            .clickable { onModelTierSelected(tier) }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(10.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = name,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold
+                                    )
+                                )
+                                Text(
+                                    text = desc,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { onModelTierSelected(tier) }
                             )
                         }
                     }
                 }
 
-                // Multi-Language selection
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 3: Suara Karakter Gemini AI
+                Text(
+                    text = "Suara Karakter (Gemini AI Voice)",
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Karakter berbicara dengan suara alami dan ekspresif menggunakan teknologi audio Gemini AI.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.RecordVoiceOver,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "${activeCharacter.name}: $geminiVoicePersona",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Text(
+                                    text = "Google Gemini Native Voice Persona",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = onTestVoice,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Tes Suara", fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // SECTION 4: Bahasa Percakapan
                 Text(
                     text = "Bahasa Percakapan",
                     style = MaterialTheme.typography.titleSmall.copy(
@@ -412,19 +420,18 @@ fun SettingsDialog(
                     val isSelected = lang == selectedLanguage
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp)
+                            .padding(vertical = 3.dp)
                             .clickable { onLanguageSelected(lang) }
-                            .testTag("language_option_${lang.code}")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Text(text = lang.flag, fontSize = 22.sp)
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(text = lang.flag, fontSize = 20.sp)
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = lang.displayName,
                                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -441,28 +448,54 @@ fun SettingsDialog(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Clear history button
-                Button(
-                    onClick = onClearHistory,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    ),
-                    modifier = Modifier.fillMaxWidth().testTag("clear_chat_history_button")
+                // SECTION 5: Data & Memori
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Hapus Riwayat Chat")
+                    OutlinedButton(
+                        onClick = onClearHistory,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(imageVector = Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Hapus Chat", fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            onClearMemories()
+                            showMemoryClearedMessage = true
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(imageVector = Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Reset Memori", fontSize = 12.sp)
+                    }
+                }
+
+                if (showMemoryClearedMessage) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "✓ Memori karakter berhasil direset!",
+                        style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32))
+                    )
                 }
             }
         },
         confirmButton = {
             Button(
                 onClick = onDismiss,
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("close_settings_button")
             ) {
-                Text("Selesai")
+                Text("Tutup")
             }
         }
     )

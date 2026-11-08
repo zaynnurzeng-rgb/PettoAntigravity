@@ -1369,8 +1369,28 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
     fun getCustomApiKey(): String = aiService.getCustomApiKey()
     fun setCustomApiKey(key: String) {
-        aiService.setCustomApiKey(key)
-        ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
+        val trimmed = key.trim()
+        aiService.setCustomApiKey(trimmed)
+        ttsEngine.googleApiKey = trimmed
+        ttsEngine.clearCooldown()
+    }
+
+    fun testApiKey(key: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val result = aiService.testApiKeyConnection(key)
+            if (result.first) {
+                setCustomApiKey(key)
+            }
+            onResult(result.first, result.second)
+        }
+    }
+
+    fun clearMemories() {
+        memoryManager.clearAllMemories()
+        _uiState.value = _uiState.value.copy(
+            memories = emptyList(),
+            userNickname = ""
+        )
     }
     fun isGeminiConnected(): Boolean = aiService.isGeminiConnected()
 
