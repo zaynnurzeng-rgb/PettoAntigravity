@@ -162,10 +162,13 @@ class NeuralTtsClient(
 
         val expressiveStylePrompt = buildExpressiveTtsPrompt(cleanText, character, language)
 
-        // Gemini models officially supporting AUDIO output modality
+        // Gemini models supporting AUDIO output modality
         val modelsToTry = listOf(
+            "gemini-2.5-flash",
+            "gemini-3.8-flash",
             "gemini-2.0-flash",
-            "gemini-2.0-flash-exp"
+            "gemini-2.0-flash-exp",
+            "gemini-3.8-live"
         )
 
         for (modelName in modelsToTry) {

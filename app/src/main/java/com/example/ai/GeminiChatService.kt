@@ -118,56 +118,75 @@ class GeminiChatService(private val context: Context? = null) {
     /**
      * Performs a fast live test to verify if the provided Gemini API key is valid and working.
      */
+    @Volatile
+    var activeDiscoveredModel: String = ""
+
+    /**
+     * Performs a fast live test to verify if the provided Gemini API key is valid.
+     * Uses the official models catalog endpoint (GET /v1beta/models) so it NEVER 404s
+     * on hardcoded model names and automatically discovers the active models for this key.
+     */
     suspend fun testApiKeyConnection(key: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val cleanKey = key.trim()
         if (cleanKey.isBlank()) {
             return@withContext false to "Kunci API tidak boleh kosong."
         }
 
-        val testModels = listOf("gemini-1.5-flash", "gemini-2.0-flash")
-        var lastErr = ""
+        val url = "https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey"
+        try {
+            val req = Request.Builder()
+                .url(url)
+                .get()
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (resp.isSuccessful) {
+                    lastAiCallSucceeded = true
+                    val rawJson = try { resp.body?.string().orEmpty() } catch (_: Exception) { "" }
+                    var foundModel = ""
+                    try {
+                        val root = JSONObject(rawJson)
+                        val modelsArr = root.optJSONArray("models")
+                        if (modelsArr != null) {
+                            for (i in 0 until modelsArr.length()) {
+                                val mObj = modelsArr.getJSONObject(i)
+                                val name = mObj.optString("name").replace("models/", "").trim()
+                                val methods = mObj.optJSONArray("supportedGenerationMethods")?.toString() ?: ""
+                                if (methods.contains("generateContent")) {
+                                    if (name.contains("flash", ignoreCase = true)) {
+                                        foundModel = name
+                                        break
+                                    } else if (foundModel.isBlank()) {
+                                        foundModel = name
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Parsing models catalog skipped: ${e.message}")
+                    }
 
-        for (model in testModels) {
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$cleanKey"
-            val json = JSONObject().apply {
-                put("contents", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("role", "user")
-                        put("parts", JSONArray().apply {
-                            put(JSONObject().put("text", "Ping"))
-                        })
-                    })
-                })
-                put("generationConfig", JSONObject().apply {
-                    put("maxOutputTokens", 5)
-                })
-            }
-            try {
-                val req = Request.Builder()
-                    .url(url)
-                    .post(json.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        lastAiCallSucceeded = true
-                        return@withContext true to "Berhasil terhubung ke Google Gemini AI ($model)!"
-                    }
-                    val code = resp.code
-                    val rawBody = try { resp.body?.string().orEmpty() } catch (_: Exception) { "" }
-                    val apiMsg = try { JSONObject(rawBody).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
-                    lastErr = when (code) {
-                        400 -> apiMsg ?: "Kunci API tidak valid atau format salah (400)."
-                        403 -> "Akses ditolak (403). Pastikan Gemini API aktif di Google AI Studio."
-                        404 -> "Model $model tidak ditemukan (404)."
-                        429 -> "Batas kuota terlampaui (Rate Limit 429). Coba beberapa saat lagi."
-                        else -> "HTTP $code: "
-                    }
+                    val chosenModel = foundModel.ifBlank { "gemini-2.5-flash" }
+                    activeDiscoveredModel = chosenModel
+                    prefs?.edit()?.putString("active_gemini_model", chosenModel)?.apply()
+
+                    return@withContext true to "Berhasil terhubung ke Google Gemini AI ($chosenModel)!"
                 }
-            } catch (e: Exception) {
-                lastErr = "Gagal menghubungi server: ${e.message}"
+
+                val code = resp.code
+                val rawBody = try { resp.body?.string().orEmpty() } catch (_: Exception) { "" }
+                val apiMsg = try { JSONObject(rawBody).optJSONObject("error")?.optString("message") } catch (_: Exception) { null }
+
+                val errMsg = when (code) {
+                    400 -> apiMsg ?: "Kunci API tidak valid atau format salah (400)."
+                    403 -> "Akses ditolak (403). Pastikan Generative Language API aktif di Google Cloud / AI Studio."
+                    429 -> "Batas kuota terlampaui (429 Rate Limit). Coba beberapa saat lagi."
+                    else -> "HTTP $code: ${apiMsg ?: "Gagal terhubung ke Gemini API"}"
+                }
+                false to errMsg
             }
+        } catch (e: Exception) {
+            false to "Gagal menghubungi server Google: ${e.message}"
         }
-        false to lastErr
     }
     /**
      * Returns ONLY a real Gemini API Key (from user's custom input in APK or AI Studio Secrets panel).
@@ -308,10 +327,32 @@ class GeminiChatService(private val context: Context? = null) {
             )
         }
         if (apiKey.isNotBlank()) {
+            val discovered = prefs?.getString("active_gemini_model", "")?.takeIf { it.isNotBlank() } ?: activeDiscoveredModel
             val restModelsOrder = when (activeTier) {
-                GeminiModelTier.ARGON_COMPLEX -> listOf("gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-lite")
-                GeminiModelTier.FLASH_LITE_FAST -> listOf("gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash")
-                else -> listOf("gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash")
+                GeminiModelTier.ARGON_COMPLEX -> listOfNotNull(
+                    "gemini-4-argon",
+                    "gemini-2.5-pro",
+                    "gemini-1.5-pro",
+                    discovered.takeIf { it.isNotBlank() },
+                    "gemini-2.5-flash",
+                    "gemini-3.8-flash"
+                ).distinct()
+                GeminiModelTier.FLASH_LITE_FAST -> listOfNotNull(
+                    "gemini-3.1-flash-lite",
+                    "gemini-3.5-flash-lite",
+                    "gemini-2.0-flash-lite",
+                    discovered.takeIf { it.isNotBlank() },
+                    "gemini-2.5-flash",
+                    "gemini-1.5-flash"
+                ).distinct()
+                else -> listOfNotNull(
+                    discovered.takeIf { it.isNotBlank() },
+                    "gemini-2.5-flash",
+                    "gemini-3.8-flash",
+                    "gemini-3.5-flash",
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash"
+                ).distinct()
             }
             try {
                 val restResult = withTimeoutOrNull(20000L) {
