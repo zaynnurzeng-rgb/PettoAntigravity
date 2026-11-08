@@ -26,10 +26,16 @@ jobs:
         echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" > .env
         echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env.example
 
-    - name: Create dummy google-services.json
+    - name: Configure google-services.json
+      env:
+        GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
       run: |
         mkdir -p app
-        cat > app/google-services.json << 'EOF'
+        if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+          echo "$GOOGLE_SERVICES_JSON" > app/google-services.json
+          echo "Real google-services.json successfully configured from GitHub Secrets."
+        else
+          cat > app/google-services.json << 'EOF'
         {
           "project_info": {
             "project_number": "000000000000",
@@ -60,6 +66,8 @@ jobs:
           "configuration_version": "1"
         }
         EOF
+          echo "Fallback dummy google-services.json created."
+        fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
