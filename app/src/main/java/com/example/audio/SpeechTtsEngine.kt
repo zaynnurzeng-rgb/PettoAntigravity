@@ -82,6 +82,8 @@ class SpeechTtsEngine(
     }
 
     var googleApiKey: String = ""
+    var engineMode: VoiceEngineMode = VoiceEngineMode.GEMINI_FLASH_TTS
+    var elevenLabsApiKey: String = ""
 
     fun clearCooldown() {
         neuralClient.clearCooldown()

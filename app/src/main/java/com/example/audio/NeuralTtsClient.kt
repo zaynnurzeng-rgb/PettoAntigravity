@@ -31,6 +31,21 @@ enum class VoiceEngineMode(val displayName: String, val icon: String, val descri
         displayName = "Gemini AI Voice",
         icon = "✨",
         description = "Suara alami dan ekspresif menggunakan teknologi Google Gemini AI Audio."
+    ),
+    CARTOON_MIMIC(
+        displayName = "Gemini AI Voice",
+        icon = "✨",
+        description = "Suara alami dan ekspresif menggunakan teknologi Google Gemini AI Audio."
+    ),
+    GOOGLE_CLOUD_NEURAL(
+        displayName = "Gemini AI Voice",
+        icon = "✨",
+        description = "Suara alami dan ekspresif menggunakan teknologi Google Gemini AI Audio."
+    ),
+    ELEVENLABS_NEURAL(
+        displayName = "Gemini AI Voice",
+        icon = "✨",
+        description = "Suara alami dan ekspresif menggunakan teknologi Google Gemini AI Audio."
     )
 }
 
